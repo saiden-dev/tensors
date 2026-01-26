@@ -611,7 +611,7 @@ def _resolve_version_id(
 def cmd_download(args: argparse.Namespace) -> int:
     """Handle the download subcommand."""
     api_key: str | None = args.api_key or load_api_key()
-    output_dir: Path = args.output.resolve() if args.output else Path.cwd()
+    output_dir: Path = args.output.resolve()
 
     if not output_dir.exists():
         console.print(f"[red]Error: Output directory not found: {output_dir}[/red]")
@@ -762,6 +762,7 @@ def main() -> int:
         "--output",
         "-o",
         type=Path,
+        default=Path(),
         help="Output directory (default: current directory)",
     )
     dl_parser.add_argument(
