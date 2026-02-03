@@ -493,7 +493,8 @@ def download_model(
                         f.write(chunk)
                         progress.update(task, advance=len(chunk))
 
-        console.print(f"[green]Downloaded:[/green] {dest_path}")
+        console.print()
+        console.print(f"[magenta]Downloaded:[/magenta] [green]\"{dest_path}\"[/green]")
         return True
 
     except httpx.HTTPStatusError as e:
