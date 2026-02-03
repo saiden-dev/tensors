@@ -531,9 +531,15 @@ def _format_count(count: int) -> str:
 
 def _display_file_info(file_path: Path, local_metadata: dict[str, Any], sha256_hash: str) -> None:
     """Display file information table."""
+    # Property column: 12 chars, Value fills remaining width
+    prop_width = 12
+    terminal_width = console.size.width
+    overhead = 7  # borders and separators for 2 columns
+    value_width = max(40, terminal_width - prop_width - overhead)
+
     file_table = Table(title="File Information", show_header=True, header_style="bold magenta")
-    file_table.add_column("Property", style="cyan")
-    file_table.add_column("Value", style="green")
+    file_table.add_column("Property", style="cyan", width=prop_width, no_wrap=True)
+    file_table.add_column("Value", style="green", width=value_width, no_wrap=True, overflow="ellipsis")
 
     file_table.add_row("File", str(file_path.name))
     file_table.add_row("Path", str(file_path.parent))
@@ -549,17 +555,20 @@ def _display_file_info(file_path: Path, local_metadata: dict[str, Any], sha256_h
 def _display_local_metadata(local_metadata: dict[str, Any]) -> None:
     """Display local safetensor metadata table."""
     if local_metadata["metadata"]:
+        # Key column: 20 chars, Value fills remaining width
+        key_width = 20
+        terminal_width = console.size.width
+        overhead = 7  # borders and separators for 2 columns
+        value_width = max(40, terminal_width - key_width - overhead)
+
         meta_table = Table(
             title="Safetensor Metadata", show_header=True, header_style="bold magenta"
         )
-        meta_table.add_column("Key", style="cyan")
-        meta_table.add_column("Value", style="green", max_width=80)
+        meta_table.add_column("Key", style="cyan", width=key_width, no_wrap=True)
+        meta_table.add_column("Value", style="green", width=value_width, no_wrap=True, overflow="ellipsis")
 
         for key, value in sorted(local_metadata["metadata"].items()):
-            display_value = str(value)
-            if len(display_value) > 200:
-                display_value = display_value[:200] + "..."
-            meta_table.add_row(key, display_value)
+            meta_table.add_row(key, str(value))
 
         console.print()
         console.print(meta_table)
@@ -575,11 +584,17 @@ def _display_civitai_data(civitai_data: dict[str, Any] | None) -> None:
         console.print("[yellow]Model not found on CivitAI.[/yellow]")
         return
 
+    # Property column: 14 chars, Value fills remaining width
+    prop_width = 14
+    terminal_width = console.size.width
+    overhead = 7  # borders and separators for 2 columns
+    value_width = max(40, terminal_width - prop_width - overhead)
+
     civit_table = Table(
         title="CivitAI Model Information", show_header=True, header_style="bold magenta"
     )
-    civit_table.add_column("Property", style="cyan")
-    civit_table.add_column("Value", style="green", max_width=80)
+    civit_table.add_column("Property", style="cyan", width=prop_width, no_wrap=True)
+    civit_table.add_column("Value", style="green", width=value_width, no_wrap=True, overflow="ellipsis")
 
     civit_table.add_row("Model ID", str(civitai_data.get("modelId", "N/A")))
     civit_table.add_row("Version ID", str(civitai_data.get("id", "N/A")))
@@ -598,7 +613,7 @@ def _display_civitai_data(civitai_data: dict[str, Any] | None) -> None:
     for f in files:
         if f.get("primary"):
             civit_table.add_row("Primary File", str(f.get("name", "N/A")))
-            civit_table.add_row("File Size (CivitAI)", _format_size(f.get("sizeKB", 0)))
+            civit_table.add_row("File Size", _format_size(f.get("sizeKB", 0)))
             meta: dict[str, Any] = f.get("metadata", {})
             if meta:
                 civit_table.add_row("Format", str(meta.get("format", "N/A")))
@@ -618,9 +633,15 @@ def _display_civitai_data(civitai_data: dict[str, Any] | None) -> None:
 
 def _display_model_info(model_data: dict[str, Any]) -> None:
     """Display full CivitAI model information."""
+    # Property column: 10 chars, Value fills remaining width
+    prop_width = 10
+    terminal_width = console.size.width
+    overhead = 7  # borders and separators for 2 columns
+    value_width = max(40, terminal_width - prop_width - overhead)
+
     model_table = Table(title="Model Information", show_header=True, header_style="bold magenta")
-    model_table.add_column("Property", style="cyan")
-    model_table.add_column("Value", style="green", max_width=80)
+    model_table.add_column("Property", style="cyan", width=prop_width, no_wrap=True)
+    model_table.add_column("Value", style="green", width=value_width, no_wrap=True, overflow="ellipsis")
 
     model_table.add_row("ID", str(model_data.get("id", "N/A")))
     model_table.add_row("Name", str(model_data.get("name", "N/A")))
@@ -638,10 +659,7 @@ def _display_model_info(model_data: dict[str, Any]) -> None:
     stats: dict[str, Any] = model_data.get("stats", {})
     if stats:
         model_table.add_row("Downloads", f"{stats.get('downloadCount', 0):,}")
-        model_table.add_row("Favorites", f"{stats.get('favoriteCount', 0):,}")
-        model_table.add_row(
-            "Rating", f"{stats.get('rating', 0):.1f} ({stats.get('ratingCount', 0)} ratings)"
-        )
+        model_table.add_row("Likes", f"{stats.get('thumbsUpCount', 0):,}")
 
     mode = model_data.get("mode")
     if mode:
@@ -652,22 +670,37 @@ def _display_model_info(model_data: dict[str, Any]) -> None:
 
     versions: list[dict[str, Any]] = model_data.get("modelVersions", [])
     if versions:
+        # Static column widths for version table
+        # ID: 7 chars, Base Model: 20 chars, Created: 10 chars, Size: 8 chars
+        id_width = 7
+        base_width = 20
+        created_width = 10
+        size_width = 8
+
+        # Calculate dynamic widths for Name and Filename
+        terminal_width = console.size.width
+        fixed_width = id_width + base_width + created_width + size_width
+        overhead = 20  # borders and separators for 5 columns
+        remaining = max(40, terminal_width - fixed_width - overhead)
+        name_width = remaining // 3
+        file_width = remaining - name_width
+
         ver_table = Table(title="Model Versions", show_header=True, header_style="bold magenta")
-        ver_table.add_column("ID", style="cyan")
-        ver_table.add_column("Name", style="green")
-        ver_table.add_column("Base Model", style="yellow")
-        ver_table.add_column("Created", style="blue")
-        ver_table.add_column("Primary File", style="white")
+        ver_table.add_column("ID", style="cyan", width=id_width, no_wrap=True)
+        ver_table.add_column("Name", style="green", width=name_width, no_wrap=True, overflow="ellipsis")
+        ver_table.add_column("Base Model", style="yellow", width=base_width, no_wrap=True, overflow="ellipsis")
+        ver_table.add_column("Created", style="blue", width=created_width, no_wrap=True)
+        ver_table.add_column("Filename", style="white", width=file_width, no_wrap=True, overflow="ellipsis")
+        ver_table.add_column("Size", justify="right", width=size_width, no_wrap=True)
 
         for ver in versions:
             files: list[dict[str, Any]] = ver.get("files", [])
             primary_file = next((f for f in files if f.get("primary")), files[0] if files else None)
-            file_info = ""
+            filename = "N/A"
+            size = "N/A"
             if primary_file:
-                file_info = (
-                    f"{primary_file.get('name', 'N/A')} "
-                    f"({_format_size(primary_file.get('sizeKB', 0))})"
-                )
+                filename = primary_file.get("name", "N/A")
+                size = _format_size(primary_file.get("sizeKB", 0))
 
             created = str(ver.get("createdAt", "N/A"))[:10]
             ver_table.add_row(
@@ -675,7 +708,8 @@ def _display_model_info(model_data: dict[str, Any]) -> None:
                 str(ver.get("name", "N/A")),
                 str(ver.get("baseModel", "N/A")),
                 created,
-                file_info,
+                filename,
+                size,
             )
 
         console.print()
@@ -696,20 +730,41 @@ def _display_search_results(results: dict[str, Any]) -> None:
         console.print("[yellow]No results found.[/yellow]")
         return
 
+    # Static column widths based on expected max values
+    # ID: 7 chars (max ~9,999,999)
+    # Type: 10 chars (e.g., "Checkpoint", "ControlNet")
+    # Base: 20 chars (e.g., "Flux.2 Klein 9B-base")
+    # Size: 8 chars (e.g., "11.08 GB")
+    # DLs: 6 chars (e.g., "999.9K")
+    # Likes: 6 chars (e.g., "999.9K")
+    id_width = 7
+    type_width = 10
+    base_width = 20
+    size_width = 8
+    dls_width = 6
+    likes_width = 6
+
+    # Calculate name width: terminal width minus fixed columns and separators
+    # Table has 7 columns with separators: "│ col │ col │ ..." = 3 chars per col (space+pipe+space)
+    # Plus outer borders: "┃" on each side = 2 chars
+    # Total overhead: 2 (outer) + 7*3 (separators) = 23 chars
+    terminal_width = console.size.width
+    fixed_width = id_width + type_width + base_width + size_width + dls_width + likes_width
+    overhead = 23  # borders and separators
+    name_width = max(20, terminal_width - fixed_width - overhead)
+
     table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("ID", style="cyan", justify="right")
-    table.add_column("Name", style="green", max_width=40)
-    table.add_column("Type", style="yellow")
-    table.add_column("Base", style="blue")
-    table.add_column("Size", justify="right")
-    table.add_column("DLs", justify="right")
-    table.add_column("Rating", justify="right")
+    table.add_column("ID", style="cyan", justify="right", width=id_width, no_wrap=True)
+    table.add_column("Name", style="green", width=name_width, no_wrap=True, overflow="ellipsis")
+    table.add_column("Type", style="yellow", width=type_width, no_wrap=True)
+    table.add_column("Base", style="blue", width=base_width, no_wrap=True, overflow="ellipsis")
+    table.add_column("Size", justify="right", width=size_width, no_wrap=True)
+    table.add_column("DLs", justify="right", width=dls_width, no_wrap=True)
+    table.add_column("Likes", justify="right", width=likes_width, no_wrap=True)
 
     for model in items:
         model_id = str(model.get("id", ""))
         name = model.get("name", "N/A")
-        if len(name) > 40:
-            name = name[:37] + "..."
         model_type = model.get("type", "N/A")
 
         # Get latest version info
@@ -726,9 +781,9 @@ def _display_search_results(results: dict[str, Any]) -> None:
 
         stats = model.get("stats", {})
         downloads = _format_count(stats.get("downloadCount", 0))
-        rating = f"{stats.get('rating', 0):.1f}"
+        likes = _format_count(stats.get("thumbsUpCount", 0))
 
-        table.add_row(model_id, name, model_type, base_model, size, downloads, rating)
+        table.add_row(model_id, name, model_type, base_model, size, downloads, likes)
 
     console.print()
     console.print(table)
