@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import struct
 import sys
@@ -42,8 +43,6 @@ DEFAULT_PATHS: dict[str, Path] = {
 
 def load_api_key() -> str | None:
     """Load API key from ~/.sftrc or CIVITAI_API_KEY env var."""
-    import os
-
     # Check environment variable first
     env_key = os.environ.get("CIVITAI_API_KEY")
     if env_key:
@@ -659,7 +658,10 @@ def cmd_download(args: argparse.Namespace) -> int:
         # Use model type-based default
         output_dir = get_default_output_path(model_type)
         if output_dir is None:
-            console.print(f"[red]Error: No default path for model type '{model_type}'. Use --output to specify.[/red]")
+            console.print(
+                f"[red]Error: No default path for model type '{model_type}'. "
+                "Use --output to specify.[/red]"
+            )
             return 1
         console.print(f"[dim]Using default path for {model_type}: {output_dir}[/dim]")
     else:

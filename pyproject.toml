@@ -25,6 +25,9 @@ dev = [
     "nuitka>=2.0",
     "ruff>=0.9.0",
     "mypy>=1.14.0",
+    "pytest>=8.0",
+    "pytest-cov>=4.1",
+    "pre-commit>=3.6",
 ]
 
 [tool.ruff]
@@ -75,3 +78,18 @@ ignore_missing_imports = false
 [[tool.mypy.overrides]]
 module = ["safetensors.*"]
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --cov=tensors --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["tensors"]
+branch = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
