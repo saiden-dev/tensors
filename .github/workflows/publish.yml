@@ -58,6 +58,42 @@ jobs:
             --remove-output \
             tensors.py
 
+      - name: Sign and notarize (macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE_BASE64 != ''
+        env:
+          APPLE_CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Import certificate
+          echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
+
+          # Sign the binary
+          codesign --force --options runtime --sign "Developer ID Application" dist/${{ matrix.artifact }}
+
+          # Create zip for notarization
+          ditto -c -k --keepParent dist/${{ matrix.artifact }} dist/${{ matrix.artifact }}.zip
+
+          # Submit for notarization
+          xcrun notarytool submit dist/${{ matrix.artifact }}.zip \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_ID_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the notarization ticket
+          xcrun stapler staple dist/${{ matrix.artifact }}
+
+          # Cleanup
+          rm certificate.p12 dist/${{ matrix.artifact }}.zip
+
       - name: Build binary (Windows)
         if: runner.os == 'Windows'
         run: |
