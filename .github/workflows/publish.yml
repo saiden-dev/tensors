@@ -38,9 +38,8 @@ jobs:
       - name: Build package
         run: python -m build
 
-      # Uncomment when PyPI trusted publisher is configured
-      # - name: Publish to PyPI
-      #   uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
