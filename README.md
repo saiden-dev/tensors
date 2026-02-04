@@ -1,4 +1,4 @@
-![Static Badge](https://img.shields.io/badge/pip_install-tensors-blue?link=https%3A%2F%2Fpypi.org%2Fproject%2Ftensors)
+[![Static Badge](https://img.shields.io/badge/pip_install-tensors-blue)](https://pypi.org/project/tensors)
 
 # tensors
 
