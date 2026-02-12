@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "WebFetch(domain:civitai.com)"
+      "WebFetch(domain:civitai.com)",
+      "Bash(ls:*)",
+      "Bash(git add:*)"
     ]
   }
 }
