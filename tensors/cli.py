@@ -439,21 +439,24 @@ def generate(
 
 @app.command()
 def serve(
+    model: Annotated[str, typer.Option(help="Path to model file for sd-server.")],
     host: Annotated[str, typer.Option(help="Wrapper API listen address.")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="Wrapper API listen port.")] = 8080,
+    sd_port: Annotated[int, typer.Option(help="sd-server listen port.")] = 1234,
     log_level: Annotated[str, typer.Option(help="Log level.")] = "info",
 ) -> None:
-    """Start the sd-server wrapper API."""
+    """Start the sd-server wrapper API (transparent proxy with hot reload)."""
     try:
         import uvicorn  # noqa: PLC0415
 
-        from tensors.server import create_app  # noqa: PLC0415
+        from tensors.server import ServerConfig, create_app  # noqa: PLC0415
     except ImportError:
         console.print("[red]Missing server dependencies. Install with:[/red]")
         console.print("  pip install tensors[server]")
         raise typer.Exit(1) from None
 
-    uvicorn.run(create_app(), host=host, port=port, log_level=log_level)
+    config = ServerConfig(model=model, port=sd_port)
+    uvicorn.run(create_app(config), host=host, port=port, log_level=log_level)
 
 
 def main() -> int:
