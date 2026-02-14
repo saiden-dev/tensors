@@ -22,12 +22,12 @@ https://github.com/user-attachments/assets/2e7629b4-34e7-4cbc-b50e-31d7fdd30239
 
 ```bash
 # Clone and install
-git clone https://github.com/aladac/tensors.git
+git clone https://github.com/saiden-dev/tensors.git
 cd tensors
 uv sync
 
 # Or install directly
-uv pip install git+https://github.com/aladac/tensors.git
+uv pip install git+https://github.com/saiden-dev/tensors.git
 
 # With server wrapper support
 pip install tensors[server]
