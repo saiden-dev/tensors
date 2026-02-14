@@ -1,0 +1,24 @@
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.12.1
+certifi==2026.1.4
+click==8.3.1
+colorama==0.4.6 ; sys_platform == 'win32'
+fastapi==0.129.0
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+idna==3.11
+markdown-it-py==4.0.0
+mdurl==0.1.2
+pydantic==2.12.5
+pydantic-core==2.41.5
+pygments==2.19.2
+rich==14.3.0
+safetensors==0.7.0
+shellingham==1.5.4
+starlette==0.52.1
+typer==0.21.1
+typing-extensions==4.15.0
+typing-inspection==0.4.2
+uvicorn==0.40.0
