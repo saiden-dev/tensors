@@ -2,7 +2,7 @@
 
 # tensors
 
-A CLI tool for working with safetensor files, CivitAI models, and stable-diffusion.cpp image generation.
+A CLI tool for working with safetensor files, CivitAI models, and stable-diffusion.cpp image generation. Supports both local and remote server modes.
 
 ## Features
 
@@ -13,7 +13,10 @@ https://github.com/user-attachments/assets/2e7629b4-34e7-4cbc-b50e-31d7fdd30239
 - **Download models** - Resume support, type-based default paths
 - **Hash verification** - SHA256 computation with progress display
 - **Image generation** - txt2img/img2img via stable-diffusion.cpp server
-- **Server wrapper** - FastAPI wrapper for sd-server process management
+- **Server wrapper** - FastAPI wrapper for sd-server with hot reload
+- **Models database** - SQLite cache for local files and CivitAI metadata
+- **Image gallery** - Manage generated images with metadata
+- **Remote mode** - Control remote tsr servers via `--remote` flag
 
 ## Installation
 
@@ -110,11 +113,105 @@ tsr generate "portrait" --sampler euler_a -n "blurry, low quality"
 Manage sd-server process via a REST API. Requires `pip install tensors[server]`.
 
 ```bash
-# Start the wrapper API
-tsr serve
+# Start the wrapper API with a model
+tsr serve --model /path/to/model.safetensors
 
 # Custom host and port
-tsr serve --host 0.0.0.0 --port 9000
+tsr serve --model /path/to/model.safetensors --host 0.0.0.0 --port 8080
+
+# Check server status
+tsr status
+
+# Hot-reload with a new model
+tsr reload --model /path/to/other_model.safetensors
+```
+
+### Models Database
+
+Track local safetensor files and cache CivitAI metadata for offline access.
+
+```bash
+# Scan a directory for safetensor files
+tsr db scan /path/to/models
+
+# Link unscanned files to CivitAI by hash
+tsr db link
+
+# Cache full CivitAI model data
+tsr db cache 12345
+
+# List local files with CivitAI info
+tsr db list
+
+# Search cached models offline
+tsr db search "pony"
+tsr db search -t lora -b sdxl
+
+# Get trigger words for a LoRA
+tsr db triggers model.safetensors
+
+# Show database statistics
+tsr db stats
+```
+
+### Image Gallery
+
+Manage generated images on a remote server.
+
+```bash
+# List images in gallery
+tsr images list --remote junkpile
+
+# Show image metadata
+tsr images show IMAGE_ID --remote junkpile
+
+# Download an image
+tsr images download IMAGE_ID --remote junkpile -o ./downloads
+
+# Delete an image
+tsr images delete IMAGE_ID --remote junkpile
+```
+
+### Model Management
+
+List and switch models on a remote server.
+
+```bash
+# List available models
+tsr models list --remote junkpile
+
+# Show active model
+tsr models active --remote junkpile
+
+# Switch to a different model
+tsr models switch /path/to/model.safetensors --remote junkpile
+
+# List available LoRAs
+tsr models loras --remote junkpile
+```
+
+### Remote Mode
+
+Control a remote tsr server instead of local operations.
+
+```bash
+# Configure a remote server
+tsr remote add junkpile http://junkpile:8080
+
+# Set default remote
+tsr remote default junkpile
+
+# List configured remotes
+tsr remote list
+
+# Generate on remote server
+tsr generate "a cat" --remote junkpile
+
+# Download model to remote server
+tsr dl -m 12345 --remote junkpile
+
+# All commands support --remote flag
+tsr status --remote junkpile
 ```
 
 ### Configuration
@@ -134,21 +231,31 @@ Config file: `~/.config/tensors/config.toml`
 ```toml
 [api]
 civitai_key = "your-api-key"
+
+[remotes]
+junkpile = "http://junkpile:8080"
+local = "http://localhost:8080"
+
+# Optional: set default remote for all commands
+default_remote = "junkpile"
 ```
 
-Or set via environment variable:
+Or set API key via environment variable:
 ```bash
 export CIVITAI_API_KEY="your-api-key"
 ```
 
 ## Default Paths
 
-Models are downloaded to XDG-compliant paths:
+Data is stored in XDG-compliant paths:
 
 | Type | Path |
 |------|------|
-| Checkpoint | `~/.local/share/tensors/models/checkpoints/` |
-| LoRA | `~/.local/share/tensors/models/loras/` |
+| Config | `~/.config/tensors/config.toml` |
+| Database | `~/.local/share/tensors/models.db` |
+| Checkpoints | `~/.local/share/tensors/models/checkpoints/` |
+| LoRAs | `~/.local/share/tensors/models/loras/` |
+| Gallery | `~/.local/share/tensors/gallery/` |
 | Metadata | `~/.local/share/tensors/metadata/` |
 
 ## Search Options
@@ -177,6 +284,31 @@ Models are downloaded to XDG-compliant paths:
 | `--host` | sd-server address (default: 127.0.0.1) |
 | `--port` | sd-server port (default: 1234) |
 
+## Server API Endpoints
+
+When running `tsr serve`, the following endpoints are available:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/status` | GET | Server status and active model |
+| `/reload` | POST | Hot-reload with new model |
+| `/api/images` | GET | List gallery images |
+| `/api/images/{id}` | GET | Get image file |
+| `/api/images/{id}/meta` | GET | Get image metadata |
+| `/api/images/{id}/edit` | POST | Update image metadata |
+| `/api/images/{id}` | DELETE | Delete image |
+| `/api/models` | GET | List available models |
+| `/api/models/active` | GET | Get active model |
+| `/api/models/switch` | POST | Switch model |
+| `/api/models/loras` | GET | List available LoRAs |
+| `/api/generate` | POST | Generate images |
+| `/api/download` | POST | Start CivitAI download |
+| `/api/db/files` | GET | List local files |
+| `/api/db/models` | GET | Search cached models |
+| `/api/db/stats` | GET | Database statistics |
+
+All sd-server endpoints (`/sdapi/v1/*`) are proxied through to the underlying process.
+
 ## Development
 
 ```bash
@@ -185,6 +317,9 @@ uv sync --group dev
 
 # Run tests
 uv run pytest
+
+# Run tests with coverage
+uv run pytest --cov=tensors
 
 # Lint and format
 uv run ruff check .
