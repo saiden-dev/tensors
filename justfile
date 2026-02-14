@@ -34,3 +34,7 @@ ui-dev:
 # Build UI for production
 ui-build:
     cd tensors/server/ui && npm run build
+
+# Deploy to junkpile (build, sync, restart, verify)
+deploy:
+    ./scripts/deploy.sh

@@ -26,11 +26,24 @@ export async function getActiveModel(): Promise<{ loaded: boolean; model: string
   return fetchJson('/api/models/active')
 }
 
-export async function switchModel(model: string): Promise<{ ok: boolean }> {
+export async function switchModel(model: string): Promise<{ ok: boolean; old_model: string; new_model: string }> {
   return fetchJson('/api/models/switch', {
     method: 'POST',
     body: JSON.stringify({ model }),
   })
+}
+
+export interface ServerStatus {
+  service: string
+  active: boolean
+  status: string
+  current_model: string | null
+  host: string | null
+  port: string | null
+}
+
+export async function getServerStatus(): Promise<ServerStatus> {
+  return fetchJson('/api/models/status')
 }
 
 export async function getLoras(): Promise<{ loras: LoRA[]; total: number }> {

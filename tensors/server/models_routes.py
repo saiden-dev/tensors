@@ -2,19 +2,58 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
 
 from tensors.config import MODELS_DIR
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from tensors.server.sd_client import get_sd_headers
 
 logger = logging.getLogger(__name__)
 
 _HTTP_OK = 200
+_SD_ENV_FILE = Path("/etc/default/sd-server")
+
+
+class SwitchModelRequest(BaseModel):
+    """Request body for switching models."""
+
+    model: str  # Model filename or full path
+
+
+async def _run_command(*args: str) -> tuple[int, str, str]:
+    """Run a shell command and return (returncode, stdout, stderr)."""
+    proc = await asyncio.create_subprocess_exec(
+        *args,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    return proc.returncode or 0, stdout.decode(), stderr.decode()
+
+
+def _read_env_file() -> dict[str, str]:
+    """Read the sd-server environment file."""
+    env: dict[str, str] = {}
+    if _SD_ENV_FILE.exists():
+        for raw_line in _SD_ENV_FILE.read_text().splitlines():
+            line = raw_line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                env[key.strip()] = value.strip()
+    return env
+
+
+def _write_env_file(env: dict[str, str]) -> str:
+    """Generate env file content."""
+    lines = ["# sd-server configuration"]
+    for key, value in env.items():
+        lines.append(f"{key}={value}")
+    return "\n".join(lines) + "\n"
 
 # Keywords for detecting base model category
 _SD15_KEYWORDS = ("sd15", "sd1.5", "sd-1.5", "sd_1.5", "1.5", "sd-1-", "v1-5")
@@ -110,8 +149,9 @@ def create_models_router() -> APIRouter:
 
         # Try to get current model from sd-server's options endpoint
         try:
+            headers = get_sd_headers(request)
             async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.get(f"{sd_server_url}/sdapi/v1/options")
+                response = await client.get(f"{sd_server_url}/sdapi/v1/options", headers=headers)
                 if response.status_code == _HTTP_OK:
                     options = response.json()
                     model_name = options.get("sd_model_checkpoint")
@@ -150,6 +190,69 @@ def create_models_router() -> APIRouter:
             "loras": loras,
             "total_checkpoints": len(checkpoints),
             "total_loras": len(loras),
+        }
+
+    @router.post("/switch")
+    async def switch_model(req: SwitchModelRequest) -> dict[str, Any]:
+        """Switch sd-server to a different model by updating env and restarting."""
+        # Find the model file
+        checkpoints = scan_checkpoints()
+        model_path: str | None = None
+
+        for cp in checkpoints:
+            if cp["filename"] == req.model or cp["path"] == req.model or cp["name"] == req.model:
+                model_path = cp["path"]
+                break
+
+        if not model_path:
+            raise HTTPException(status_code=404, detail=f"Model not found: {req.model}")
+
+        # Read current env, update SD_MODEL
+        env = _read_env_file()
+        old_model = env.get("SD_MODEL", "")
+        env["SD_MODEL"] = model_path
+
+        # Write new env file via sudo tee
+        new_content = _write_env_file(env)
+        proc = await asyncio.create_subprocess_exec(
+            "sudo", "tee", str(_SD_ENV_FILE),
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await proc.communicate(new_content.encode())
+        if proc.returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Failed to write env file: {stderr.decode()}")
+
+        # Restart sd-server
+        returncode, _stdout, stderr = await _run_command("sudo", "systemctl", "restart", "sd-server")
+        if returncode != 0:
+            raise HTTPException(status_code=500, detail=f"Failed to restart sd-server: {stderr}")
+
+        logger.info(f"Switched model from {old_model} to {model_path}")
+
+        return {
+            "ok": True,
+            "old_model": old_model,
+            "new_model": model_path,
+            "message": "Model switched, sd-server restarting",
+        }
+
+    @router.get("/status")
+    async def sd_server_status() -> dict[str, Any]:
+        """Get sd-server systemd service status."""
+        _returncode, stdout, _stderr = await _run_command("systemctl", "is-active", "sd-server")
+        is_active = stdout.strip() == "active"
+
+        env = _read_env_file()
+
+        return {
+            "service": "sd-server",
+            "active": is_active,
+            "status": stdout.strip(),
+            "current_model": env.get("SD_MODEL"),
+            "host": env.get("SD_HOST"),
+            "port": env.get("SD_PORT"),
         }
 
     return router

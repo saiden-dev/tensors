@@ -13,6 +13,7 @@ from pydantic import BaseModel as PydanticBaseModel
 from pydantic import Field
 
 from tensors.server.gallery import Gallery
+from tensors.server.sd_client import get_sd_headers
 
 logger = logging.getLogger(__name__)
 
@@ -141,8 +142,9 @@ def create_generate_router() -> APIRouter:
         url = f"{sd_server_url}/sdapi/v1/txt2img"
 
         try:
+            headers = get_sd_headers(request)
             async with httpx.AsyncClient(timeout=300) as client:
-                response = await client.post(url, json=body)
+                response = await client.post(url, json=body, headers=headers)
                 response.raise_for_status()
                 result = response.json()
         except httpx.ConnectError as e:
@@ -178,8 +180,9 @@ def create_generate_router() -> APIRouter:
         url = f"{sd_server_url}/sdapi/v1/samplers"
 
         try:
+            headers = get_sd_headers(request)
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(url)
+                response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 return {"samplers": response.json()}
         except httpx.ConnectError as e:
@@ -194,8 +197,9 @@ def create_generate_router() -> APIRouter:
         url = f"{sd_server_url}/sdapi/v1/schedulers"
 
         try:
+            headers = get_sd_headers(request)
             async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.get(url)
+                response = await client.get(url, headers=headers)
                 response.raise_for_status()
                 return {"schedulers": response.json()}
         except httpx.ConnectError as e:

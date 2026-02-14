@@ -9,6 +9,8 @@ import httpx
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from tensors.server.sd_client import get_sd_headers
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,8 +23,9 @@ def create_router() -> APIRouter:
         """Check if the external sd-server is reachable."""
         sd_server_url = request.app.state.sd_server_url
         try:
+            headers = get_sd_headers(request)
             async with httpx.AsyncClient(timeout=5) as client:
-                r = await client.get(sd_server_url)
+                r = await client.get(sd_server_url, headers=headers)
                 return {
                     "status": "ok",
                     "sd_server_url": sd_server_url,
@@ -46,6 +49,8 @@ def create_router() -> APIRouter:
         body = await request.body()
         headers = dict(request.headers)
         headers.pop("host", None)
+        # Add API key if configured
+        headers.update(get_sd_headers(request))
         client = request.app.state.client
 
         try:

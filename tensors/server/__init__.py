@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from tensors.config import get_sd_server_url
+from tensors.config import get_sd_server_api_key, get_sd_server_url
 from tensors.server.civitai_routes import create_civitai_router
 from tensors.server.db_routes import create_db_router
 from tensors.server.download_routes import create_download_router
@@ -37,11 +37,15 @@ def create_app(sd_server_url: str | None = None) -> FastAPI:
                        get_sd_server_url() to resolve from env/config.
     """
     backend_url = sd_server_url or get_sd_server_url()
+    api_key = get_sd_server_api_key()
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _app.state.sd_server_url = backend_url
+        _app.state.sd_server_api_key = api_key
         logger.info(f"Proxying to sd-server at: {backend_url}")
+        if api_key:
+            logger.info("Using API key authentication for sd-server")
         async with httpx.AsyncClient(timeout=300) as client:
             _app.state.client = client
             yield

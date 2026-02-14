@@ -9,6 +9,16 @@ const store = useAppStore()
 const prompt = ref('')
 const generating = ref(false)
 
+// Snackbar states
+const showError = computed({
+  get: () => !!store.switchError,
+  set: () => { store.switchError = null }
+})
+const showSuccess = computed({
+  get: () => !store.switchingModel && !!store.switchMessage && !store.switchError,
+  set: () => { store.switchMessage = null }
+})
+
 interface ChatMessage {
   prompt: string
   params: string
@@ -95,6 +105,29 @@ async function generate() {
 
 <template>
   <v-container fluid class="fill-height pa-0 d-flex flex-column">
+    <!-- Model switch overlay -->
+    <v-overlay
+      :model-value="store.switchingModel"
+      class="align-center justify-center"
+      persistent
+    >
+      <v-card class="pa-6 text-center" min-width="300">
+        <v-progress-circular indeterminate color="primary" size="48" class="mb-4" />
+        <div class="text-h6">{{ store.switchMessage || 'Switching model...' }}</div>
+        <div class="text-caption text-grey mt-2">sd-server is restarting</div>
+      </v-card>
+    </v-overlay>
+
+    <!-- Error snackbar -->
+    <v-snackbar v-model="showError" color="error" timeout="5000">
+      {{ store.switchError }}
+    </v-snackbar>
+
+    <!-- Success snackbar -->
+    <v-snackbar v-model="showSuccess" color="success" timeout="3000">
+      {{ store.switchMessage }}
+    </v-snackbar>
+
     <!-- Chat area -->
     <v-container fluid class="flex-grow-1 overflow-y-auto pa-4">
       <div v-if="messages.length === 0" class="text-center text-grey mt-16">

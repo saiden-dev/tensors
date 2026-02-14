@@ -274,3 +274,27 @@ def get_sd_server_url() -> str:
             return str(url)
 
     return SD_SERVER_DEFAULT_URL
+
+
+def get_sd_server_api_key() -> str | None:
+    """Get the sd-server API key.
+
+    Resolution order:
+    1. SD_SERVER_API_KEY environment variable
+    2. config.toml [server].sd_server_api_key
+    3. None (no authentication)
+    """
+    # Check environment variable first
+    env_key = os.environ.get("SD_SERVER_API_KEY")
+    if env_key:
+        return env_key
+
+    # Check config file
+    config = load_config()
+    server_config = config.get("server", {})
+    if isinstance(server_config, dict):
+        key = server_config.get("sd_server_api_key")
+        if key:
+            return str(key)
+
+    return None

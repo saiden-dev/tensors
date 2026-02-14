@@ -66,6 +66,8 @@ export const useAppStore = defineStore('app', () => {
   // Loading states
   const loadingModels = ref(false)
   const switchingModel = ref(false)
+  const switchMessage = ref<string | null>(null)
+  const switchError = ref<string | null>(null)
 
   // Actions
   async function loadModels() {
@@ -93,12 +95,38 @@ export const useAppStore = defineStore('app', () => {
     if (modelPath === activeModel.value) return
 
     switchingModel.value = true
+    switchMessage.value = 'Switching model...'
+    switchError.value = null
+
     try {
-      await api.switchModel(modelPath)
-      activeModel.value = modelPath
-      selectedModel.value = modelPath
-    } catch (error) {
+      const result = await api.switchModel(modelPath)
+      switchMessage.value = 'Restarting sd-server...'
+
+      // Poll for server to come back online (up to 60 seconds)
+      let attempts = 0
+      const maxAttempts = 30
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000))
+        try {
+          const status = await api.getServerStatus()
+          if (status.active && status.current_model?.includes(modelPath.split('/').pop() || '')) {
+            activeModel.value = result.new_model
+            selectedModel.value = result.new_model
+            switchMessage.value = 'Model switched successfully'
+            setTimeout(() => { switchMessage.value = null }, 3000)
+            return
+          }
+        } catch {
+          // Server still restarting, continue polling
+        }
+        attempts++
+        switchMessage.value = `Waiting for sd-server... (${attempts}/${maxAttempts})`
+      }
+      throw new Error('Timeout waiting for sd-server to restart')
+    } catch (error: any) {
       console.error('Failed to switch model:', error)
+      switchError.value = error.message || 'Failed to switch model'
+      setTimeout(() => { switchError.value = null }, 5000)
       throw error
     } finally {
       switchingModel.value = false
@@ -132,6 +160,8 @@ export const useAppStore = defineStore('app', () => {
     // Loading states
     loadingModels,
     switchingModel,
+    switchMessage,
+    switchError,
 
     // Actions
     loadModels,
