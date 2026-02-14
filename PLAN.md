@@ -1,147 +1,275 @@
-# Plan: SD Image Generation (CLI + Web Gallery)
+# Plan: tsr Server/Client Architecture with Models Database
 
-Add `tsr gen` CLI command and `tsr gallery` web UI for generating images using diffusers + PyTorch (ROCm) directly from local safetensor checkpoints. Gallery is mobile-first, generation-only — no search, no model library.
+Transform `tsr` into a unified server/client tool for remote image generation on junkpile (ROCm GPU server), with model-specific Docker images, a models database, and full image management capabilities.
 
-## Stack
+## Architecture
 
-- **diffusers** — load safetensor checkpoints via `from_single_file()`, LoRA via `load_lora_weights()`, all schedulers built-in
-- **torch** (ROCm) — assumed pre-installed with ROCm support (`torch.device("cuda")` works on ROCm via HIP)
-- **transformers** — CLIP text encoders (diffusers dependency)
-- **accelerate** — device placement
-- **safetensors** — already a project dependency
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         junkpile (server)                           │
+├─────────────────────────────────────────────────────────────────────┤
+│  ┌──────────────────────┐    ┌────────────────────────────────────┐ │
+│  │ sd-server:pony       │◄───│  tsr serve (FastAPI)               │ │
+│  │ sd-server:illustrious│    │  - POST /api/generate              │ │
+│  │ sd-server:flux       │    │  - GET/POST/DELETE /api/images     │ │
+│  │ (Docker/ROCm)        │    │  - GET /api/models, /api/loras     │ │
+│  └──────────────────────┘    │  - POST /api/download (CivitAI)    │ │
+│                              │  - GET/POST /api/db/* (models.db)  │ │
+│  ┌──────────────────────┐    │                                    │ │
+│  │     models.db        │◄───┤                                    │ │
+│  │ (SQLite: CivitAI +   │    └────────────────────────────────────┘ │
+│  │  local file cache)   │                    ▲                      │
+│  └──────────────────────┘                    │ :8080                │
+└──────────────────────────────────────────────│──────────────────────┘
+                                               │ HTTP
+┌──────────────────────────────────────────────│──────────────────────┐
+│                      local machine           │                      │
+├──────────────────────────────────────────────┼──────────────────────┤
+│  tsr generate "prompt" --remote junkpile                            │
+│  tsr images list --remote junkpile                                  │
+│  tsr images delete <id> --remote junkpile                           │
+│  tsr models list --remote junkpile                                  │
+│  tsr models switch pony --remote junkpile                           │
+│  tsr dl 999258 --remote junkpile                                    │
+│  tsr db search "pony" --remote junkpile                             │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-## Phase 1: Generation Engine Module
+## Phase 1: Model-Specific Docker Images
 
 ### Description
-New `tensors/generate.py` module — wraps diffusers pipeline for txt2img from local safetensor files. Handles checkpoint loading, LoRA application, scheduler selection, and generation.
+Create parameterized Dockerfiles that produce model-family-specific images with optimal defaults baked in. Each image knows its best sampler, scheduler, resolution, CFG scale, and negative prompt.
 
 ### Steps
 
-#### Step 1.1: Create generate.py with pipeline management
-- **Objective**: Load safetensor checkpoints into diffusers pipeline, generate images
-- **Files**: `tensors/generate.py`
+#### Step 1.1: Create model defaults configuration
+- **Objective**: Define optimal generation parameters per model family
+- **Files**: `rocm-docker/model-defaults.toml`
 - **Dependencies**: None
 - **Implementation**:
-  - `ImageGenerator` class
-  - `load_checkpoint(path)` — `StableDiffusionPipeline.from_single_file()` or `StableDiffusionXLPipeline.from_single_file()` for SDXL safetensors. Auto-detect SD1.5 vs SDXL from metadata. Move to ROCm device.
-  - `load_lora(path, strength)` — `pipe.load_lora_weights()`, support multiple LoRAs with `pipe.fuse_lora(lora_scale=strength)`
-  - `set_scheduler(name)` — map name strings to diffusers schedulers: EulerDiscreteScheduler, EulerAncestralDiscreteScheduler, DPMSolverMultistepScheduler, DDIMScheduler, LMSDiscreteScheduler, PNDMScheduler, etc.
-  - `generate()` — accepts prompt, negative_prompt, steps, cfg_scale, width, height, seed, batch_size. Returns list of PIL Images.
-  - Keep pipeline loaded between calls (model stays in VRAM)
-  - `unload()` — free VRAM
+  - Create TOML with sections: `[sd15]`, `[sdxl]`, `[pony]`, `[illustrious]`, `[flux]`
+  - Each section: `width`, `height`, `steps`, `cfg_scale`, `sampler`, `scheduler`, `negative_prompt`
+  - Reference: `models.md` has the research already
 
-#### Step 1.2: Add config entries for generation defaults
-- **Objective**: Configurable default generation params and model paths in config.toml
-- **Files**: `tensors/config.py`
+#### Step 1.2: Parameterize Dockerfile for model families
+- **Objective**: Single Dockerfile that builds model-specific images via build args
+- **Files**: `rocm-docker/Dockerfile.sd-server`
 - **Dependencies**: Step 1.1
 - **Implementation**:
-  - Add `[generate]` section: `models_dir` (default `~/models`), `lora_dir`, `output_dir` (default `~/.local/share/tensors/gallery/`), `default_steps`, `default_cfg`, `default_sampler`, `default_scheduler`, `default_width`, `default_height`
-  - Enum or list of available schedulers with friendly names
+  - Add `ARG MODEL_FAMILY=sdxl` with validation
+  - Inject defaults from model-defaults.toml as ENV vars
+  - Keep entrypoint.sh flexible (env vars override baked defaults)
+  - Build targets: `sd-server:pony`, `sd-server:illustrious`, `sd-server:flux`
 
-## Phase 2: CLI Generate Command
+#### Step 1.3: Add build script for all model variants
+- **Objective**: Automated build of all model-specific images
+- **Files**: `rocm-docker/build-all.sh`
+- **Dependencies**: Step 1.2
+- **Implementation**:
+  - Loop through model families, build each with appropriate args
+  - Tag pattern: `sd-server:{family}`
+  - Push to registry (optional)
+
+## Phase 2: Models Database in tensors
 
 ### Description
-`tsr gen` command that loads a checkpoint, generates images, saves to gallery directory with metadata sidecar JSON.
+Move the SQLite database from rocm-docker into tensors as a proper module with full CRUD operations, exposed via CLI and API.
 
 ### Steps
 
-#### Step 2.1: Implement `tsr gen` command
-- **Objective**: CLI command with all generation parameters as options
-- **Files**: `tensors/cli.py`
-- **Dependencies**: Phase 1
+#### Step 2.1: Create database module
+- **Objective**: SQLite wrapper with schema management and CRUD operations
+- **Files**: `tensors/db.py`, `tensors/schema.sql`
+- **Dependencies**: None
 - **Implementation**:
-  - `tsr gen "prompt text"` — positional prompt argument
-  - Options: `--model/-m` (path or name in models_dir), `--negative/-n`, `--steps/-s`, `--cfg/-c`, `--width/-W`, `--height/-H`, `--sampler`, `--scheduler`, `--seed`, `--lora` (repeatable, format `name:strength`), `--batch/-b`, `--output/-o` (override output dir)
-  - Rich progress: model loading spinner, then generation progress (diffusers callback for step progress)
-  - Save output as `{timestamp}_{seed}.png` in gallery dir
-  - Save sidecar `{timestamp}_{seed}.json` with all generation params + model name + time elapsed
-  - Display: filename, resolution, seed, time elapsed
-  - `--json` flag for machine-readable output
+  - Move schema from `rocm-docker/import_models.py` to `tensors/schema.sql`
+  - `Database` class with connection management, migrations
+  - Methods: `scan_files()`, `link_civitai()`, `cache_model()`, `search_models()`, `get_triggers()`
+  - Use existing `tensors/api.py` for CivitAI fetches
+  - Config: `DATA_DIR / "models.db"`
 
-#### Step 2.2: Add `tsr gen-ls` subcommand
-- **Objective**: List available models, LoRAs, and schedulers
+#### Step 2.2: Add db CLI commands
+- **Objective**: Expose database operations via `tsr db` subcommand group
 - **Files**: `tensors/cli.py`
-- **Dependencies**: Phase 1
+- **Dependencies**: Step 2.1
 - **Implementation**:
-  - Scan models_dir for `.safetensors` files
-  - Scan lora_dir for LoRA files
-  - List available schedulers
-  - Rich table output, `--json` flag
+  - `tsr db scan <directory>` — Scan safetensors, compute hashes, store metadata
+  - `tsr db link` — Match unlinked files to CivitAI by hash
+  - `tsr db cache <model_id>` — Fetch and cache full CivitAI model data
+  - `tsr db list` — List local files with CivitAI info (uses view)
+  - `tsr db search <query>` — Search cached models offline
+  - `tsr db triggers <file>` — Show trigger words for a LoRA
+  - All commands support `--json` output
 
-## Phase 3: Web Gallery UI
+#### Step 2.3: Add database API endpoints
+- **Objective**: Expose database queries via HTTP API
+- **Files**: `tensors/server/routes.py`
+- **Dependencies**: Step 2.1
+- **Implementation**:
+  - `GET /api/db/files` — List local files
+  - `GET /api/db/models` — Search cached models
+  - `GET /api/db/models/{id}` — Get model details
+  - `GET /api/db/triggers/{file_path}` — Get trigger words
+  - `POST /api/db/scan` — Trigger directory scan
+  - `POST /api/db/link` — Trigger CivitAI linking
+
+## Phase 3: Enhanced Server API
 
 ### Description
-`tsr gallery` serves a mobile-first web app for generating images and browsing results. Single HTML file, no build tools. Dark theme.
+Extend the existing FastAPI server with image gallery management, model switching, and CivitAI download capabilities.
 
 ### Steps
 
-#### Step 3.1: Create gallery API server
-- **Objective**: FastAPI app that runs generation and serves the gallery
-- **Files**: `tensors/gallery.py`
-- **Dependencies**: Phase 1, Phase 2
+#### Step 3.1: Add image gallery endpoints
+- **Objective**: CRUD for generated images with metadata
+- **Files**: `tensors/server/routes.py`, `tensors/server/gallery.py`
+- **Dependencies**: Phase 2
 - **Implementation**:
-  - Holds a single `ImageGenerator` instance (lazy-loaded on first generate)
-  - `POST /api/generate` — accepts generation params JSON, runs pipeline, saves to gallery dir, returns image URL + metadata. Checkpoint loaded/swapped as needed.
-  - `GET /api/images` — list gallery images (paginated, newest first), reads sidecar JSONs for metadata
-  - `GET /api/images/{filename}` — serve image file
-  - `DELETE /api/images/{filename}` — delete image + sidecar
-  - `GET /api/models` — list available checkpoints in models_dir
-  - `GET /api/loras` — list available LoRAs
-  - `GET /api/schedulers` — list available scheduler names
-  - `GET /api/config` — current default generation params
-  - `GET /api/status` — is model loaded, which one, VRAM usage
-  - Static file serving for the frontend
-  - Add `fastapi`, `uvicorn` as optional dependencies (`[project.optional-dependencies] gallery = [...]`)
+  - `GET /api/images` — List images (paginated, newest first), metadata from sidecar JSON
+  - `GET /api/images/{id}` — Get image file
+  - `GET /api/images/{id}/meta` — Get generation metadata
+  - `DELETE /api/images/{id}` — Delete image + sidecar
+  - `POST /api/images/{id}/edit` — Update metadata (tags, notes)
+  - Images stored in `DATA_DIR / "gallery/"` with `{timestamp}_{seed}.png` + `.json` sidecar
+  - Gallery config: output directory, max storage, cleanup policy
 
-#### Step 3.2: Build mobile-first gallery frontend
-- **Objective**: Single-page responsive UI for generation + browsing
-- **Files**: `tensors/static/index.html`
+#### Step 3.2: Add model management endpoints
+- **Objective**: List available models, switch active model, hot-reload
+- **Files**: `tensors/server/routes.py`
+- **Dependencies**: None
+- **Implementation**:
+  - `GET /api/models` — List available checkpoints (scan models directory)
+  - `GET /api/models/active` — Current loaded model info
+  - `POST /api/models/switch` — Switch model (calls sd-server reload or container swap)
+  - `GET /api/loras` — List available LoRAs
+  - Container strategy: either reload sd-server with new model, or run multiple containers per model family
+
+#### Step 3.3: Add CivitAI download proxy endpoint
+- **Objective**: Download models directly to server via API
+- **Files**: `tensors/server/routes.py`
+- **Dependencies**: Step 2.1
+- **Implementation**:
+  - `POST /api/download` — Accept model/version ID or hash, download to appropriate directory
+  - Stream progress via SSE or polling endpoint
+  - Auto-scan and link after download
+  - Use existing `tensors/api.py` download logic
+
+#### Step 3.4: Enhance generation endpoint
+- **Objective**: Full generation control with gallery integration
+- **Files**: `tensors/server/routes.py`
 - **Dependencies**: Step 3.1
 - **Implementation**:
-  - **Generate panel** (top on mobile, sidebar on desktop):
-    - Model selector dropdown (populated from `/api/models`)
-    - Prompt textarea, negative prompt textarea
-    - Collapsible "Advanced" section: steps, cfg, sampler dropdown, scheduler dropdown, width, height, seed, LoRA selector with strength slider
-    - Generate button with loading state + step progress
-    - Dropdowns populated from API on load
-  - **Gallery grid** (below/main area):
-    - Masonry or uniform grid of generated images, newest first
-    - Tap/click to view full size with metadata overlay (prompt, params, seed)
-    - Swipe between images on mobile
-    - Delete button on detail view
-    - Infinite scroll / load more
-  - **Design**:
-    - Dark theme
-    - CSS grid/flexbox, no framework
-    - Touch-friendly (large tap targets, no hover-dependent UI)
-    - `<meta name="viewport">` for mobile
-  - Single HTML file with inline CSS/JS (no build step)
+  - `POST /api/generate` — Forward to sd-server, save result to gallery
+  - Accept all sd-server params: prompt, negative, width, height, steps, cfg, sampler, scheduler, seed, loras
+  - Return image ID, metadata, and base64 (optional)
+  - Support batch generation
+  - Auto-increment seed for batches
 
-#### Step 3.3: Add `tsr gallery` CLI command
-- **Objective**: Launch the gallery web server from CLI
-- **Files**: `tensors/cli.py`
-- **Dependencies**: Step 3.1, Step 3.2
-- **Implementation**:
-  - `tsr gallery` — starts uvicorn on `0.0.0.0:7860`
-  - Options: `--port/-p`, `--host`, `--model/-m` (pre-load a checkpoint)
-  - Auto-open browser with `--open` flag
+## Phase 4: Client Mode for tsr CLI
 
-## Phase 4: Tests
+### Description
+Add `--remote` flag to existing commands to talk to a remote tsr server instead of local operations or direct CivitAI API.
 
 ### Steps
 
-#### Step 4.1: Test generate.py
-- **Files**: `tests/test_generate.py`
+#### Step 4.1: Create remote client module
+- **Objective**: HTTP client wrapper for tsr server API
+- **Files**: `tensors/client.py`
+- **Dependencies**: Phase 3
+- **Implementation**:
+  - `TsrClient` class wrapping httpx
+  - Methods mirror server endpoints: `generate()`, `list_images()`, `delete_image()`, `list_models()`, `switch_model()`, `download()`, `db_search()`
+  - Handle streaming responses for downloads
+  - Auth: API key header (optional, future)
+
+#### Step 4.2: Add remote configuration
+- **Objective**: Configure remote server URL in config.toml
+- **Files**: `tensors/config.py`
+- **Dependencies**: None
+- **Implementation**:
+  - Add `[remotes]` section: `junkpile = "http://junkpile:8080"`
+  - `--remote <name>` flag resolves to URL from config
+  - `--remote <url>` accepts direct URL
+  - Default remote configurable: `default_remote = "junkpile"`
+
+#### Step 4.3: Update CLI commands with --remote support
+- **Objective**: All relevant commands work against remote server
+- **Files**: `tensors/cli.py`
+- **Dependencies**: Step 4.1, Step 4.2
+- **Implementation**:
+  - `tsr generate` — Use remote if `--remote`, else local sd-server
+  - `tsr images list/delete/show` — New subcommand group for gallery
+  - `tsr models list/switch` — New subcommand group
+  - `tsr dl` — Proxy through remote if `--remote`
+  - `tsr db *` — All db commands support `--remote`
+  - Consistent UX: same output format local vs remote
+
+## Phase 5: Docker Deployment Automation
+
+### Description
+Scripts and configs for deploying and managing sd-server containers on junkpile.
+
+### Steps
+
+#### Step 5.1: Create docker-compose for multi-model setup
+- **Objective**: Run multiple sd-server containers, one per model family
+- **Files**: `rocm-docker/docker-compose.yml`
 - **Dependencies**: Phase 1
 - **Implementation**:
-  - Mock torch/diffusers (don't require GPU in CI)
-  - Test scheduler mapping, parameter validation, config loading
-  - Test checkpoint type detection (SD1.5 vs SDXL)
+  - Service per model family: `sd-pony`, `sd-illustrious`, `sd-flux`
+  - Shared volumes: `/models`, `/loras`, `/output`
+  - Each on different port: 1234, 1235, 1236
+  - tsr server routes to correct container based on active model
+  - Health checks
 
-#### Step 4.2: Test gallery API
-- **Files**: `tests/test_gallery.py`
+#### Step 5.2: Create deployment script
+- **Objective**: One-command deploy/update on junkpile
+- **Files**: `rocm-docker/deploy.sh`
+- **Dependencies**: Step 5.1
+- **Implementation**:
+  - Copy files to junkpile
+  - Build images
+  - Pull models if missing
+  - Start containers
+  - Start tsr server
+  - Verify health
+
+#### Step 5.3: Add systemd service for tsr server
+- **Objective**: Auto-start tsr server on boot
+- **Files**: `rocm-docker/tsr-server.service`
+- **Dependencies**: Step 5.2
+- **Implementation**:
+  - systemd unit file
+  - Depends on docker.service
+  - Restart on failure
+  - Install instructions
+
+## Phase 6: Tests
+
+### Steps
+
+#### Step 6.1: Test database module
+- **Files**: `tests/test_db.py`
+- **Dependencies**: Phase 2
+- **Implementation**:
+  - Test schema creation, migrations
+  - Test CRUD operations
+  - Test CivitAI linking logic
+  - Use temp database
+
+#### Step 6.2: Test server API endpoints
+- **Files**: `tests/test_server.py`
 - **Dependencies**: Phase 3
 - **Implementation**:
   - Use FastAPI TestClient
-  - Mock ImageGenerator
-  - Test image listing, deletion, model/lora listing
+  - Mock sd-server responses
+  - Test gallery CRUD
+  - Test model listing/switching
+
+#### Step 6.3: Test client module
+- **Files**: `tests/test_client.py`
+- **Dependencies**: Phase 4
+- **Implementation**:
+  - Mock HTTP responses with respx
+  - Test all client methods
+  - Test error handling
