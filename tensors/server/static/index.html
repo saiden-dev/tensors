@@ -80,7 +80,7 @@
         }
 
         container.innerHTML = data.images.map(img => `
-          <a href="/api/images/${img.id}" class="glightbox" data-gallery="gallery" data-description="${img.prompt || ''}">
+          <a href="javascript:void(0)" class="glightbox" data-gallery="gallery" data-type="image" data-href="/api/images/${img.id}" data-description="${img.prompt || ''}">
             <img src="/api/images/${img.id}" alt="${img.id}" loading="lazy">
           </a>
         `).join('');
