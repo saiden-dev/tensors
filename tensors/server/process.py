@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import signal
 import subprocess
@@ -38,7 +39,8 @@ class ProcessManager:
             raise RuntimeError("Server already running — stop it first")
         self.config = config
         cmd = self.build_cmd()
-        self.proc = subprocess.Popen(cmd)
+        # Inherit environment (important for HSA_OVERRIDE_GFX_VERSION on ROCm)
+        self.proc = subprocess.Popen(cmd, env=os.environ.copy())
         logger.info("started sd-server pid=%d cmd=%s", self.proc.pid, cmd)
 
     def stop(self) -> bool:
