@@ -7,7 +7,7 @@
 
 ## Phase 2: Models Database in tensors
 - [x] Step 2.1: Create `tensors/db.py` + `tensors/schema.sql` (SQLite wrapper, schema, CRUD)
-- [ ] Step 2.2: Add `tsr db` CLI commands (scan, link, cache, list, search, triggers)
+- [x] Step 2.2: Add `tsr db` CLI commands (scan, link, cache, list, search, triggers, stats)
 - [ ] Step 2.3: Add `/api/db/*` endpoints (files, models, triggers, scan, link)
 
 ## Phase 3: Enhanced Server API

@@ -35,7 +35,7 @@ def _get_headers(api_key: str | None) -> dict[str, str]:
     return headers
 
 
-def fetch_civitai_model_version(version_id: int, api_key: str | None, console: Console) -> dict[str, Any] | None:
+def fetch_civitai_model_version(version_id: int, api_key: str | None, console: Console | None = None) -> dict[str, Any] | None:
     """Fetch model version information from CivitAI by version ID."""
     url = f"{CIVITAI_API_BASE}/model-versions/{version_id}"
 
@@ -47,25 +47,20 @@ def fetch_civitai_model_version(version_id: int, api_key: str | None, console: C
         result: dict[str, Any] = response.json()
         return result
     except httpx.HTTPStatusError as e:
-        console.print(f"[red]API error: {e.response.status_code}[/red]")
+        if console:
+            console.print(f"[red]API error: {e.response.status_code}[/red]")
         return None
     except httpx.RequestError as e:
-        console.print(f"[red]Request error: {e}[/red]")
+        if console:
+            console.print(f"[red]Request error: {e}[/red]")
         return None
 
 
-def fetch_civitai_model(model_id: int, api_key: str | None, console: Console) -> dict[str, Any] | None:
+def fetch_civitai_model(model_id: int, api_key: str | None, console: Console | None = None) -> dict[str, Any] | None:
     """Fetch model information from CivitAI by model ID."""
     url = f"{CIVITAI_API_BASE}/models/{model_id}"
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        progress.add_task("[cyan]Fetching model from CivitAI...", total=None)
-
+    def _do_fetch() -> dict[str, Any] | None:
         try:
             response = httpx.get(url, headers=_get_headers(api_key), timeout=30.0)
             if response.status_code == HTTPStatus.NOT_FOUND:
@@ -74,25 +69,32 @@ def fetch_civitai_model(model_id: int, api_key: str | None, console: Console) ->
             result: dict[str, Any] = response.json()
             return result
         except httpx.HTTPStatusError as e:
-            console.print(f"[red]API error: {e.response.status_code}[/red]")
+            if console:
+                console.print(f"[red]API error: {e.response.status_code}[/red]")
             return None
         except httpx.RequestError as e:
-            console.print(f"[red]Request error: {e}[/red]")
+            if console:
+                console.print(f"[red]Request error: {e}[/red]")
             return None
 
+    if console:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("[cyan]Fetching model from CivitAI...", total=None)
+            return _do_fetch()
+    else:
+        return _do_fetch()
 
-def fetch_civitai_by_hash(sha256_hash: str, api_key: str | None, console: Console) -> dict[str, Any] | None:
+
+def fetch_civitai_by_hash(sha256_hash: str, api_key: str | None, console: Console | None = None) -> dict[str, Any] | None:
     """Fetch model information from CivitAI by SHA256 hash."""
     url = f"{CIVITAI_API_BASE}/model-versions/by-hash/{sha256_hash}"
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-        transient=True,
-    ) as progress:
-        progress.add_task("[cyan]Fetching from CivitAI...", total=None)
-
+    def _do_fetch() -> dict[str, Any] | None:
         try:
             response = httpx.get(url, headers=_get_headers(api_key), timeout=30.0)
             if response.status_code == HTTPStatus.NOT_FOUND:
@@ -101,11 +103,25 @@ def fetch_civitai_by_hash(sha256_hash: str, api_key: str | None, console: Consol
             result: dict[str, Any] = response.json()
             return result
         except httpx.HTTPStatusError as e:
-            console.print(f"[red]API error: {e.response.status_code}[/red]")
+            if console:
+                console.print(f"[red]API error: {e.response.status_code}[/red]")
             return None
         except httpx.RequestError as e:
-            console.print(f"[red]Request error: {e}[/red]")
+            if console:
+                console.print(f"[red]Request error: {e}[/red]")
             return None
+
+    if console:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+            transient=True,
+        ) as progress:
+            progress.add_task("[cyan]Fetching from CivitAI...", total=None)
+            return _do_fetch()
+    else:
+        return _do_fetch()
 
 
 def _build_search_params(
