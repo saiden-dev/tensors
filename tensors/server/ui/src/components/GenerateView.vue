@@ -149,7 +149,7 @@ async function generate() {
             :disabled="store.switchingModel || generating"
             density="compact"
             hide-details
-            style="min-width: 180px"
+            style="width: 200px"
             @update:model-value="handleModelChange"
           />
         </div>
@@ -162,7 +162,7 @@ async function generate() {
             :disabled="generating"
             density="compact"
             hide-details
-            style="min-width: 150px"
+            style="width: 150px"
           />
           <v-text-field
             v-model.number="store.loraWeight"
