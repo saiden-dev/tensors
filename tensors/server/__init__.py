@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 import httpx
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from tensors.server.civitai_routes import create_civitai_router
 from tensors.server.db_routes import create_db_router
@@ -24,7 +25,7 @@ from tensors.server.routes import create_router
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-__all__ = ["ProcessManager", "ServerConfig", "create_app"]
+__all__ = ["ProcessManager", "ServerConfig", "app", "create_app"]
 
 logger = logging.getLogger(__name__)
 
@@ -50,12 +51,19 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
 
     app = FastAPI(title="sd-server wrapper", lifespan=lifespan)
 
-    # Serve gallery UI at root
+    # Serve Vue UI static files
     static_dir = Path(__file__).parent / "static"
+    assets_dir = static_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
     @app.get("/", include_in_schema=False)
     async def gallery_ui() -> FileResponse:
         return FileResponse(static_dir / "index.html")
+
+    @app.get("/vite.svg", include_in_schema=False)
+    async def vite_icon() -> FileResponse:
+        return FileResponse(static_dir / "vite.svg")
 
     app.include_router(create_civitai_router())  # Must be before catch-all proxy
     app.include_router(create_db_router())  # Must be before catch-all proxy
@@ -66,3 +74,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
     app.include_router(create_router(pm))
     app.state.pm = pm
     return app
+
+
+# Module-level app instance for uvicorn
+app = create_app()
