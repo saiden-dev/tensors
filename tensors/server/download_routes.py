@@ -9,7 +9,7 @@ from typing import Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException
 from pydantic import BaseModel as PydanticBaseModel
 
-from tensors.api import download_model, fetch_civitai_by_hash, fetch_civitai_model, fetch_civitai_model_version
+from tensors.api import download_model_with_progress, fetch_civitai_by_hash, fetch_civitai_model, fetch_civitai_model_version
 from tensors.config import MODELS_DIR, load_api_key
 from tensors.db import Database
 
@@ -89,6 +89,22 @@ def _get_output_dir(version_info: dict[str, Any], override: str | None) -> Path:
     return type_dirs.get(model_type, MODELS_DIR / "other")
 
 
+_KB = 1024
+_MB = _KB * 1024
+_GB = _MB * 1024
+
+
+def _format_size(size_bytes: int) -> str:
+    """Format bytes as human readable string."""
+    if size_bytes >= _GB:
+        return f"{size_bytes / _GB:.1f} GB"
+    if size_bytes >= _MB:
+        return f"{size_bytes / _MB:.1f} MB"
+    if size_bytes >= _KB:
+        return f"{size_bytes / _KB:.1f} KB"
+    return f"{size_bytes} B"
+
+
 def _do_download(
     version_id: int,
     dest_path: Path,
@@ -98,19 +114,27 @@ def _do_download(
     """Background task to perform the download."""
     try:
         _active_downloads[download_id]["status"] = "downloading"
+        _active_downloads[download_id]["downloaded"] = 0
+        _active_downloads[download_id]["total"] = 0
+        _active_downloads[download_id]["speed"] = 0
+        _active_downloads[download_id]["progress"] = 0
 
-        # Create a mock console for download progress
-        from io import StringIO  # noqa: PLC0415
+        def on_progress(downloaded: int, total: int, speed: float) -> None:
+            """Update progress in active downloads dict."""
+            _active_downloads[download_id]["downloaded"] = downloaded
+            _active_downloads[download_id]["total"] = total
+            _active_downloads[download_id]["speed"] = speed
+            _active_downloads[download_id]["downloaded_str"] = _format_size(downloaded)
+            _active_downloads[download_id]["total_str"] = _format_size(total) if total > 0 else "Unknown"
+            _active_downloads[download_id]["speed_str"] = f"{_format_size(int(speed))}/s"
+            if total > 0:
+                _active_downloads[download_id]["progress"] = round(100 * downloaded / total, 1)
 
-        from rich.console import Console  # noqa: PLC0415
-
-        output = StringIO()
-        console = Console(file=output, force_terminal=False)
-
-        success = download_model(version_id, dest_path, api_key, console, resume=True)
+        success = download_model_with_progress(version_id, dest_path, api_key, on_progress, resume=True)
 
         if success:
             _active_downloads[download_id]["status"] = "completed"
+            _active_downloads[download_id]["progress"] = 100
             _active_downloads[download_id]["path"] = str(dest_path)
 
             # Auto-scan and link the downloaded file

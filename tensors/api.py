@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import time
+from collections.abc import Callable
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +27,9 @@ from tensors.config import CIVITAI_API_BASE, CIVITAI_DOWNLOAD_BASE, BaseModel, M
 
 if TYPE_CHECKING:
     from rich.console import Console
+
+# Progress update throttle interval (seconds)
+_PROGRESS_UPDATE_INTERVAL = 0.25
 
 
 def _get_headers(api_key: str | None) -> dict[str, str]:
@@ -260,6 +265,98 @@ def _stream_download(
     console.print()
     console.print(f'[magenta]Downloaded:[/magenta] [green]"{dest_path}"[/green]')
     return True
+
+
+# Type alias for progress callback: (downloaded_bytes, total_bytes, speed_bytes_per_sec)
+ProgressCallback = Callable[[int, int, float], None]
+
+
+def _stream_download_with_callback(
+    response: httpx.Response,
+    dest_path: Path,
+    mode: str,
+    initial_size: int,
+    on_progress: ProgressCallback | None = None,
+) -> bool:
+    """Stream download content to file with progress callback."""
+    content_length = response.headers.get("content-length")
+    total_size = int(content_length) + initial_size if content_length else 0
+    downloaded = initial_size
+    start_time = time.time()
+    last_time = start_time
+
+    with dest_path.open(mode) as f:
+        for chunk in response.iter_bytes(1024 * 1024):
+            f.write(chunk)
+            downloaded += len(chunk)
+
+            if on_progress:
+                now = time.time()
+                elapsed = now - start_time
+                speed = downloaded / elapsed if elapsed > 0 else 0
+                # Throttle updates
+                if now - last_time >= _PROGRESS_UPDATE_INTERVAL:
+                    on_progress(downloaded, total_size, speed)
+                    last_time = now
+
+    # Final progress update
+    if on_progress:
+        elapsed = time.time() - start_time
+        speed = downloaded / elapsed if elapsed > 0 else 0
+        on_progress(downloaded, total_size, speed)
+
+    return True
+
+
+def download_model_with_progress(
+    version_id: int,
+    dest_path: Path,
+    api_key: str | None,
+    on_progress: ProgressCallback | None = None,
+    resume: bool = True,
+) -> bool:
+    """Download a model from CivitAI with progress callback instead of console output."""
+    import logging  # noqa: PLC0415
+
+    logger = logging.getLogger(__name__)
+    url = f"{CIVITAI_DOWNLOAD_BASE}/{version_id}"
+    params: dict[str, str] = {}
+    if api_key:
+        params["token"] = api_key
+
+    # Set up resume
+    headers: dict[str, str] = {}
+    mode = "wb"
+    initial_size = 0
+
+    if resume and dest_path.exists():
+        initial_size = dest_path.stat().st_size
+        headers["Range"] = f"bytes={initial_size}-"
+        mode = "ab"
+        logger.info(f"Resuming download from {initial_size / (1024**2):.1f} MB")
+
+    try:
+        with httpx.stream(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            follow_redirects=True,
+            timeout=httpx.Timeout(30.0, read=None),
+        ) as response:
+            if response.status_code == HTTPStatus.REQUESTED_RANGE_NOT_SATISFIABLE:
+                return True  # Already complete
+
+            response.raise_for_status()
+            dest_path = _get_dest_from_response(response, dest_path)
+            return _stream_download_with_callback(response, dest_path, mode, initial_size, on_progress)
+
+    except httpx.HTTPStatusError as e:
+        logger.error(f"Download error: HTTP {e.response.status_code}")
+        return False
+    except httpx.RequestError as e:
+        logger.error(f"Download error: {e}")
+        return False
 
 
 def download_model(

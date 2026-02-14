@@ -94,9 +94,44 @@ export async function getCivitaiModel(id: number): Promise<CivitaiModel> {
 }
 
 // Download
-export async function downloadModel(modelId?: number, versionId?: number): Promise<{ ok: boolean }> {
+export interface DownloadResponse {
+  download_id: string
+  status: string
+  version_id: number
+  destination: string
+  model_name: string
+  version_name: string
+}
+
+export interface DownloadStatus {
+  id: string
+  version_id: number
+  status: 'queued' | 'downloading' | 'completed' | 'failed'
+  path: string
+  filename: string
+  model_name: string
+  version_name: string
+  downloaded?: number
+  total?: number
+  progress?: number
+  speed?: number
+  downloaded_str?: string
+  total_str?: string
+  speed_str?: string
+  error?: string
+}
+
+export async function downloadModel(modelId?: number, versionId?: number): Promise<DownloadResponse> {
   return fetchJson('/api/download', {
     method: 'POST',
     body: JSON.stringify({ model_id: modelId, version_id: versionId }),
   })
+}
+
+export async function getDownloadStatus(downloadId: string): Promise<DownloadStatus> {
+  return fetchJson(`/api/download/status/${downloadId}`)
+}
+
+export async function getActiveDownloads(): Promise<{ downloads: DownloadStatus[]; total: number }> {
+  return fetchJson('/api/download/active')
 }
