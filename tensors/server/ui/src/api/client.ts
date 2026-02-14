@@ -38,6 +38,11 @@ export async function getLoras(): Promise<{ loras: LoRA[]; total: number }> {
 }
 
 // Generation
+export interface LoraConfig {
+  path: string
+  multiplier: number
+}
+
 export interface GenerateParams {
   prompt: string
   negative_prompt?: string
@@ -47,6 +52,7 @@ export interface GenerateParams {
   cfg_scale?: number
   seed?: number
   save_to_gallery?: boolean
+  lora?: LoraConfig
 }
 
 export async function generate(params: GenerateParams): Promise<{ images: GeneratedImage[] }> {

@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import * as api from '@/api/client'
 import type { CivitaiModel } from '@/types'
 import ModelCard from './ModelCard.vue'
+
+const STORAGE_KEY = 'civitai-search-state'
 
 const query = ref('')
 const modelType = ref('')
@@ -11,6 +13,35 @@ const sortOrder = ref('Most Downloaded')
 const loading = ref(false)
 const results = ref<CivitaiModel[]>([])
 const searched = ref(false)
+
+// Restore search state from sessionStorage
+onMounted(() => {
+  const saved = sessionStorage.getItem(STORAGE_KEY)
+  if (saved) {
+    try {
+      const state = JSON.parse(saved)
+      query.value = state.query || ''
+      modelType.value = state.modelType || ''
+      baseModel.value = state.baseModel || ''
+      sortOrder.value = state.sortOrder || 'Most Downloaded'
+      results.value = state.results || []
+      searched.value = state.searched || false
+    } catch (e) {
+      console.error('Failed to restore search state:', e)
+    }
+  }
+})
+
+function saveState() {
+  sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+    query: query.value,
+    modelType: modelType.value,
+    baseModel: baseModel.value,
+    sortOrder: sortOrder.value,
+    results: results.value,
+    searched: searched.value,
+  }))
+}
 
 const modelTypes = [
   { title: 'All Types', value: '' },
@@ -54,6 +85,7 @@ async function search() {
     results.value = []
   } finally {
     loading.value = false
+    saveState()
   }
 }
 </script>

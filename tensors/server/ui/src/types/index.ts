@@ -4,6 +4,7 @@ export interface Model {
   filename: string
   size_mb: number
   modified: number
+  category: 'sd15' | 'large'
 }
 
 export interface LoRA {
@@ -12,6 +13,7 @@ export interface LoRA {
   filename: string
   size_mb: number
   modified: number
+  category: 'sd15' | 'large'
 }
 
 export interface GeneratedImage {

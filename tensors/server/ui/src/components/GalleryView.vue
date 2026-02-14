@@ -98,6 +98,15 @@ onMounted(loadImages)
                 </div>
               </template>
             </v-img>
+            <div class="delete-overlay">
+              <v-btn
+                icon="mdi-delete"
+                size="small"
+                color="error"
+                variant="flat"
+                @click.stop="deleteImage(img.id)"
+              />
+            </div>
           </v-card>
         </v-col>
       </v-row>
@@ -161,9 +170,20 @@ onMounted(loadImages)
   cursor: pointer;
   transition: transform 0.2s, border-color 0.2s;
   border: 1px solid transparent;
+  position: relative;
 }
 .gallery-card:hover {
   transform: scale(1.03);
   border-color: rgb(var(--v-theme-primary));
+}
+.delete-overlay {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.gallery-card:hover .delete-overlay {
+  opacity: 1;
 }
 </style>
