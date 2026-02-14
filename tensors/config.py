@@ -165,3 +165,73 @@ def get_default_output_path(model_type: str | None) -> Path | None:
     if model_type and model_type in DEFAULT_PATHS:
         return DEFAULT_PATHS[model_type]
     return None
+
+
+# ============================================================================
+# Remote Server Configuration
+# ============================================================================
+
+
+def get_remotes() -> dict[str, str]:
+    """Get configured remote servers.
+
+    Returns a dict mapping names to URLs, e.g., {"junkpile": "http://junkpile:8080"}
+    """
+    config = load_config()
+    remotes = config.get("remotes", {})
+    return dict(remotes) if isinstance(remotes, dict) else {}
+
+
+def get_default_remote() -> str | None:
+    """Get the default remote name or URL."""
+    config = load_config()
+    return config.get("default_remote")
+
+
+def resolve_remote(remote: str | None) -> str | None:
+    """Resolve a remote name or URL to a full URL.
+
+    Args:
+        remote: Remote name (from config), URL, or None
+
+    Returns:
+        Full URL or None if no remote specified and no default
+    """
+    if remote is None:
+        # Check for default remote
+        default = get_default_remote()
+        if default:
+            remote = default
+        else:
+            return None
+
+    # Check if it's a URL (starts with http:// or https://)
+    if remote.startswith(("http://", "https://")):
+        return remote
+
+    # Look up in configured remotes
+    remotes = get_remotes()
+    if remote in remotes:
+        return remotes[remote]
+
+    # Treat as hostname with default port
+    return f"http://{remote}:8080"
+
+
+def save_remote(name: str, url: str) -> None:
+    """Save a remote server configuration."""
+    config = load_config()
+    if "remotes" not in config:
+        config["remotes"] = {}
+    config["remotes"][name] = url
+    save_config(config)
+
+
+def set_default_remote(name: str | None) -> None:
+    """Set the default remote."""
+    config = load_config()
+    if name is None:
+        config.pop("default_remote", None)
+    else:
+        config["default_remote"] = name
+    save_config(config)

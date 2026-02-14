@@ -17,9 +17,9 @@
 - [x] Step 3.4: Enhance `/api/generate` (gallery integration, full params)
 
 ## Phase 4: Client Mode for tsr CLI
-- [ ] Step 4.1: Create `tensors/client.py` (TsrClient HTTP wrapper)
-- [ ] Step 4.2: Add `[remotes]` config section + `--remote` flag support
-- [ ] Step 4.3: Update CLI commands with `--remote` support (generate, images, models, dl, db)
+- [x] Step 4.1: Create `tensors/client.py` (TsrClient HTTP wrapper)
+- [x] Step 4.2: Add `[remotes]` config section + `--remote` flag support
+- [x] Step 4.3: Update CLI commands with `--remote` support (generate, images, models, dl, db)
 
 ## Phase 5: Docker Deployment Automation (SKIPPED)
 - [x] Step 5.1: ~~Create `rocm-docker/docker-compose.yml`~~ (skipped)
