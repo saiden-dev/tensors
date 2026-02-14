@@ -25,7 +25,7 @@ const modelItems = computed(() =>
 
 const loraItems = computed(() => [
   { title: 'None', value: '' },
-  ...store.loras.map(l => ({ title: l.name, value: l.path }))
+  ...store.filteredLoras.map(l => ({ title: l.name, value: l.path }))
 ])
 
 
@@ -33,6 +33,11 @@ async function handleModelChange(model: string) {
   if (model && model !== store.activeModel) {
     try {
       await store.switchModel(model)
+      // Reset LoRA if it's not compatible with the new model
+      const loraStillValid = store.filteredLoras.some(l => l.path === store.selectedLora)
+      if (!loraStillValid) {
+        store.selectedLora = ''
+      }
     } catch (e) {
       console.error(e)
     }
@@ -46,17 +51,15 @@ async function generate() {
   prompt.value = ''
   generating.value = true
 
-  // Build final prompt with LoRA
-  let finalPrompt = currentPrompt
-  if (store.selectedLora) {
-    const loraName = store.loras.find(l => l.path === store.selectedLora)?.name
-    if (loraName) {
-      finalPrompt = `<lora:${loraName}:${store.loraWeight}> ${currentPrompt}`
-    }
-  }
+  // Build final prompt with quality tags
+  const finalPrompt = `${store.defaultQualityTags}, ${currentPrompt}`
+
+  // Get LoRA config if selected (sd-server expects LoRA as separate param with filename, not in prompt)
+  const selectedLoraModel = store.selectedLora ? store.loras.find(l => l.path === store.selectedLora) : null
+  const loraConfig = selectedLoraModel ? { path: selectedLoraModel.filename, multiplier: store.loraWeight } : undefined
 
   const { width, height } = store.resolution
-  const paramsStr = `${width}×${height}, ${store.steps} steps${store.batchSize > 1 ? `, batch ${store.batchSize}` : ''}${store.selectedLora ? ', +LoRA' : ''}`
+  const paramsStr = `${width}×${height}, ${store.steps} steps${store.batchSize > 1 ? `, batch ${store.batchSize}` : ''}${selectedLoraModel ? `, +${selectedLoraModel.name}` : ''}`
 
   const message = reactive<ChatMessage>({
     prompt: currentPrompt,
@@ -70,11 +73,13 @@ async function generate() {
     for (let i = 0; i < store.batchSize; i++) {
       const result = await api.generate({
         prompt: finalPrompt,
+        negative_prompt: store.defaultNegativePrompt,
         width,
         height,
         steps: store.steps,
         seed: -1,
         save_to_gallery: true,
+        lora: loraConfig,
       })
       message.images.push(...result.images)
     }

@@ -16,6 +16,28 @@ logger = logging.getLogger(__name__)
 
 _HTTP_OK = 200
 
+# Keywords for detecting base model category
+_SD15_KEYWORDS = ("sd15", "sd1.5", "sd-1.5", "sd_1.5", "1.5", "sd-1-", "v1-5")
+_LARGE_KEYWORDS = ("sdxl", "xl", "pony", "illustrious", "ilust", "noob", "animagine")
+
+
+def _detect_model_category(name: str) -> str:
+    """Detect model category from filename. Returns 'sd15' or 'large'."""
+    name_lower = name.lower()
+
+    # Check SD 1.5 keywords first
+    for kw in _SD15_KEYWORDS:
+        if kw in name_lower:
+            return "sd15"
+
+    # Check large model keywords
+    for kw in _LARGE_KEYWORDS:
+        if kw in name_lower:
+            return "large"
+
+    # Default to large (SDXL/Pony/Illustrious are more common now)
+    return "large"
+
 
 # =============================================================================
 # Helper Functions
@@ -32,13 +54,15 @@ def scan_models(directory: Path, extensions: tuple[str, ...] = (".safetensors", 
     for ext in extensions:
         for path in directory.rglob(f"*{ext}"):
             stat = path.stat()
+            name = path.stem
             models.append(
                 {
-                    "name": path.stem,
+                    "name": name,
                     "path": str(path),
                     "filename": path.name,
                     "size_mb": round(stat.st_size / (1024 * 1024), 2),
                     "modified": stat.st_mtime,
+                    "category": _detect_model_category(name),
                 }
             )
 
@@ -50,7 +74,7 @@ def scan_models(directory: Path, extensions: tuple[str, ...] = (".safetensors", 
 def scan_loras(directory: Path | None = None) -> list[dict[str, Any]]:
     """Scan for LoRA files."""
     lora_dir = directory or MODELS_DIR / "loras"
-    return scan_models(lora_dir, extensions=(".safetensors",))
+    return scan_models(lora_dir, extensions=(".safetensors", ".gguf"))
 
 
 def scan_checkpoints(directory: Path | None = None) -> list[dict[str, Any]]:

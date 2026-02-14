@@ -20,6 +20,10 @@ export const useAppStore = defineStore('app', () => {
   const steps = ref(20)
   const batchSize = ref(1)
 
+  // Default quality prompts (applied automatically)
+  const defaultQualityTags = 'masterpiece, best quality, absurdres, highres'
+  const defaultNegativePrompt = 'bad anatomy, bad hands, missing fingers, extra fingers, extra digit, fewer digits, extra limbs, missing limbs, fused fingers, too many fingers, mutated hands, poorly drawn hands, poorly drawn face, mutation, deformed, ugly, blurry, bad proportions, gross proportions, malformed limbs, long neck, cropped, worst quality, low quality, normal quality, jpeg artifacts, signature, watermark, username, text, error'
+
   // All resolution presets (base size × aspect ratio)
   const resolutionPresets: ResolutionPreset[] = [
     // 512 base
@@ -47,6 +51,17 @@ export const useAppStore = defineStore('app', () => {
     { label: 'mid', presets: resolutionPresets.filter(p => p.id.startsWith('768-')) },
     { label: 'high', presets: resolutionPresets.filter(p => p.id.startsWith('1024-')) },
   ]
+
+  // Computed: selected model's category
+  const selectedModelCategory = computed(() => {
+    const model = models.value.find(m => m.path === selectedModel.value || m.name === selectedModel.value)
+    return model?.category || 'large'
+  })
+
+  // Computed: LoRAs filtered by selected model category
+  const filteredLoras = computed(() => {
+    return loras.value.filter(l => l.category === selectedModelCategory.value)
+  })
 
   // Loading states
   const loadingModels = ref(false)
@@ -97,8 +112,10 @@ export const useAppStore = defineStore('app', () => {
     // Models
     models,
     loras,
+    filteredLoras,
     activeModel,
     selectedModel,
+    selectedModelCategory,
     selectedLora,
     loraWeight,
 
@@ -109,6 +126,8 @@ export const useAppStore = defineStore('app', () => {
     steps,
     batchSize,
     resolution,
+    defaultQualityTags,
+    defaultNegativePrompt,
 
     // Loading states
     loadingModels,

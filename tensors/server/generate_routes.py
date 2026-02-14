@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
+class LoraConfig(PydanticBaseModel):
+    """LoRA configuration for sd-server."""
+
+    path: str
+    multiplier: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
 class GenerateRequest(PydanticBaseModel):
     """Request body for image generation."""
 
@@ -37,6 +44,7 @@ class GenerateRequest(PydanticBaseModel):
     batch_size: int = Field(default=1, ge=1, le=16)
     save_to_gallery: bool = True
     return_base64: bool = False
+    lora: LoraConfig | None = None
 
 
 # =============================================================================
@@ -60,6 +68,9 @@ def _build_sd_request(req: GenerateRequest) -> dict[str, Any]:
         body["sampler_name"] = req.sampler_name
     if req.scheduler:
         body["scheduler"] = req.scheduler
+    # sd-server expects LoRA as JSON array, not in prompt
+    if req.lora:
+        body["lora"] = [{"path": req.lora.path, "multiplier": req.lora.multiplier}]
     return body
 
 
@@ -98,6 +109,8 @@ def _process_image(
             "sampler": req.sampler_name,
             "scheduler": req.scheduler,
             "model": model,
+            "lora": req.lora.path if req.lora else None,
+            "lora_weight": req.lora.multiplier if req.lora else None,
             "generated_at": time.time(),
         }
         gallery_img = gallery.save_image(image_bytes, metadata=metadata, seed=seed)
