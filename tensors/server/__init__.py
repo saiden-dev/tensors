@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import httpx
 from fastapi import FastAPI
 
+from tensors.server.db_routes import create_db_router
 from tensors.server.models import ServerConfig
 from tensors.server.process import ProcessManager
 from tensors.server.routes import create_router
@@ -41,6 +42,7 @@ def create_app(config: ServerConfig | None = None) -> FastAPI:
         pm.stop()
 
     app = FastAPI(title="sd-server wrapper", lifespan=lifespan)
+    app.include_router(create_db_router())  # Must be first to avoid catch-all conflict
     app.include_router(create_router(pm))
     app.state.pm = pm
     return app
