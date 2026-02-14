@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>tsr Gallery</title>
+  <title>tsr</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/glightbox/dist/css/glightbox.min.css">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -12,29 +12,59 @@
       background: #1a1a1a;
       color: #fff;
       min-height: 100vh;
+      display: flex;
     }
-    header {
-      padding: 1rem;
-      background: #222;
-      text-align: center;
-      position: sticky;
-      top: 0;
-      z-index: 100;
+
+    /* Sidebar */
+    .sidebar {
+      width: 60px;
+      background: #111;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 1rem 0;
+      gap: 0.5rem;
+      border-right: 1px solid #333;
     }
-    header h1 { font-size: 1.5rem; font-weight: 300; }
+    .sidebar button {
+      width: 44px;
+      height: 44px;
+      border: none;
+      background: transparent;
+      color: #888;
+      cursor: pointer;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+    .sidebar button:hover { background: #222; color: #fff; }
+    .sidebar button.active { background: #333; color: #fff; }
+    .sidebar svg { width: 24px; height: 24px; }
+
+    /* Main content */
+    .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+
+    /* Views */
+    .view { display: none; flex: 1; flex-direction: column; overflow: hidden; }
+    .view.active { display: flex; }
+
+    /* Gallery view */
+    #gallery-view { overflow-y: auto; }
     .gallery {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
       gap: 8px;
-      padding: 8px;
+      padding: 12px;
     }
     @media (min-width: 768px) {
-      .gallery { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; padding: 12px; }
+      .gallery { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); }
     }
     .gallery a {
       aspect-ratio: 1;
       overflow: hidden;
-      border-radius: 4px;
+      border-radius: 6px;
       background: #333;
     }
     .gallery img {
@@ -44,53 +74,263 @@
       transition: transform 0.2s;
     }
     .gallery a:hover img { transform: scale(1.05); }
-    .empty {
-      text-align: center;
-      padding: 4rem 1rem;
-      color: #666;
+
+    /* Generate view */
+    #generate-view {
+      display: flex;
+      flex-direction: column;
     }
-    .loading {
-      text-align: center;
-      padding: 4rem 1rem;
-      color: #666;
+    .chat-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
     }
+    .chat-message {
+      margin-bottom: 1rem;
+    }
+    .chat-prompt {
+      color: #888;
+      font-size: 0.85rem;
+      margin-bottom: 0.5rem;
+      padding-left: 4px;
+    }
+    .chat-images {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    .chat-images a {
+      width: 150px;
+      height: 150px;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #333;
+    }
+    @media (min-width: 768px) {
+      .chat-images a { width: 200px; height: 200px; }
+    }
+    .chat-images img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .chat-images .generating {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      font-size: 0.8rem;
+    }
+    .chat-images .generating::after {
+      content: '';
+      width: 20px;
+      height: 20px;
+      border: 2px solid #444;
+      border-top-color: #888;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin-left: 8px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Input area */
+    .input-area {
+      padding: 12px;
+      background: #222;
+      border-top: 1px solid #333;
+    }
+    .input-row {
+      display: flex;
+      gap: 8px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    .input-row input[type="text"] {
+      flex: 1;
+      padding: 12px 16px;
+      border: 1px solid #444;
+      border-radius: 8px;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 1rem;
+    }
+    .input-row input[type="text"]:focus {
+      outline: none;
+      border-color: #666;
+    }
+    .input-row input[type="number"] {
+      width: 60px;
+      padding: 12px 8px;
+      border: 1px solid #444;
+      border-radius: 8px;
+      background: #1a1a1a;
+      color: #fff;
+      font-size: 1rem;
+      text-align: center;
+    }
+    .input-row button {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      background: #0066cc;
+      color: #fff;
+      font-size: 1rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .input-row button:hover { background: #0077ee; }
+    .input-row button:disabled { background: #444; cursor: not-allowed; }
+
+    .empty { text-align: center; padding: 4rem 1rem; color: #666; }
   </style>
 </head>
 <body>
-  <header>
-    <h1>tsr Gallery</h1>
-  </header>
-  <main>
-    <div id="gallery" class="gallery">
-      <div class="loading">Loading...</div>
+  <nav class="sidebar">
+    <button id="nav-generate" title="Generate" class="active">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456zM16.5 19.5h3m-1.5-1.5v3" />
+      </svg>
+    </button>
+    <button id="nav-gallery" title="Gallery">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 15.75l5.159-5.159a2.25 2.25 0 013.182 0l5.159 5.159m-1.5-1.5l1.409-1.409a2.25 2.25 0 013.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 001.5-1.5V6a1.5 1.5 0 00-1.5-1.5H3.75A1.5 1.5 0 002.25 6v12a1.5 1.5 0 001.5 1.5zm10.5-11.25h.008v.008h-.008V8.25zm.375 0a.375.375 0 11-.75 0 .375.375 0 01.75 0z" />
+      </svg>
+    </button>
+  </nav>
+
+  <main class="main">
+    <!-- Generate View -->
+    <div id="generate-view" class="view active">
+      <div class="chat-area" id="chat-area"></div>
+      <div class="input-area">
+        <div class="input-row">
+          <input type="text" id="prompt-input" placeholder="Describe what you want to generate..." autofocus>
+          <input type="number" id="steps-input" value="20" min="1" max="50" title="Steps">
+          <button id="generate-btn">Generate</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gallery View -->
+    <div id="gallery-view" class="view">
+      <div id="gallery" class="gallery"></div>
     </div>
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/glightbox/dist/js/glightbox.min.js"></script>
   <script>
+    let lightbox = null;
+
+    // Navigation
+    document.getElementById('nav-generate').onclick = () => switchView('generate');
+    document.getElementById('nav-gallery').onclick = () => switchView('gallery');
+
+    function switchView(view) {
+      document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.querySelectorAll('.sidebar button').forEach(b => b.classList.remove('active'));
+      document.getElementById(view + '-view').classList.add('active');
+      document.getElementById('nav-' + view).classList.add('active');
+      if (view === 'gallery') loadGallery();
+    }
+
+    // Gallery
     async function loadGallery() {
       const container = document.getElementById('gallery');
       try {
         const res = await fetch('/api/images?limit=100');
         const data = await res.json();
-
         if (!data.images || data.images.length === 0) {
           container.innerHTML = '<div class="empty">No images yet</div>';
           return;
         }
-
         container.innerHTML = data.images.map(img => `
-          <a href="javascript:void(0)" class="glightbox" data-gallery="gallery" data-type="image" data-href="/api/images/${img.id}" data-description="${img.prompt || ''}">
+          <a href="javascript:void(0)" class="glightbox" data-type="image" data-href="/api/images/${img.id}">
             <img src="/api/images/${img.id}" alt="${img.id}" loading="lazy">
           </a>
         `).join('');
-
-        GLightbox({ selector: '.glightbox' });
+        initLightbox();
       } catch (e) {
         container.innerHTML = '<div class="empty">Failed to load gallery</div>';
       }
     }
-    loadGallery();
+
+    function initLightbox() {
+      if (lightbox) lightbox.destroy();
+      lightbox = GLightbox({ selector: '.glightbox' });
+    }
+
+    // Generate
+    const chatArea = document.getElementById('chat-area');
+    const promptInput = document.getElementById('prompt-input');
+    const stepsInput = document.getElementById('steps-input');
+    const generateBtn = document.getElementById('generate-btn');
+
+    promptInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        generate();
+      }
+    });
+    generateBtn.onclick = generate;
+
+    async function generate() {
+      const prompt = promptInput.value.trim();
+      if (!prompt) return;
+
+      const steps = parseInt(stepsInput.value) || 20;
+      promptInput.value = '';
+      generateBtn.disabled = true;
+
+      // Add message
+      const msgDiv = document.createElement('div');
+      msgDiv.className = 'chat-message';
+      msgDiv.innerHTML = `
+        <div class="chat-prompt">${escapeHtml(prompt)}</div>
+        <div class="chat-images">
+          <div class="generating">Generating</div>
+        </div>
+      `;
+      chatArea.appendChild(msgDiv);
+      chatArea.scrollTop = chatArea.scrollHeight;
+
+      try {
+        const res = await fetch('/api/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            prompt: prompt,
+            steps: steps,
+            width: 512,
+            height: 512,
+            save_to_gallery: true
+          })
+        });
+        const data = await res.json();
+        const imagesDiv = msgDiv.querySelector('.chat-images');
+
+        if (data.images && data.images.length > 0) {
+          imagesDiv.innerHTML = data.images.map(id => `
+            <a href="javascript:void(0)" class="glightbox" data-type="image" data-href="/api/images/${id}">
+              <img src="/api/images/${id}" alt="${id}">
+            </a>
+          `).join('');
+          initLightbox();
+        } else {
+          imagesDiv.innerHTML = '<div class="empty">Generation failed</div>';
+        }
+      } catch (e) {
+        msgDiv.querySelector('.chat-images').innerHTML = '<div class="empty">Error: ' + e.message + '</div>';
+      }
+
+      generateBtn.disabled = false;
+      chatArea.scrollTop = chatArea.scrollHeight;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
   </script>
 </body>
 </html>
