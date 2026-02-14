@@ -27,9 +27,9 @@
 - [x] Step 5.3: ~~Create `rocm-docker/tsr-server.service`~~ (skipped)
 
 ## Phase 6: Tests
-- [ ] Step 6.1: `tests/test_db.py` (database module tests)
-- [ ] Step 6.2: `tests/test_server.py` (API endpoint tests)
-- [ ] Step 6.3: `tests/test_client.py` (client module tests)
+- [x] Step 6.1: `tests/test_db.py` (database module tests)
+- [x] Step 6.2: `tests/test_server.py` (API endpoint tests)
+- [x] Step 6.3: `tests/test_client.py` (client module tests)
 
 ---
 
