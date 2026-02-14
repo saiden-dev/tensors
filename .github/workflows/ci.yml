@@ -58,4 +58,4 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Run mypy
-        run: uv run mypy tensors.py
+        run: uv run mypy tensors/
