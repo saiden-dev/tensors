@@ -558,13 +558,16 @@ def status(
 @app.command()
 def reload(
     model: Annotated[str, typer.Option(help="Path to model file for sd-server.")],
-    host: Annotated[str, typer.Option(help="Wrapper API host.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="Wrapper API port.")] = 8080,
+    remote: Annotated[str | None, typer.Option("-r", "--remote", help="Remote server name or URL")] = None,
+    host: Annotated[str, typer.Option(help="Wrapper API host (local mode).")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(help="Wrapper API port (local mode).")] = 8080,
 ) -> None:
     """Reload sd-server with a new model."""
     import httpx  # noqa: PLC0415
 
-    url = f"http://{host}:{port}/reload"
+    remote_url = resolve_remote(remote)
+    url = f"{remote_url.rstrip('/')}/reload" if remote_url else f"http://{host}:{port}/reload"
+
     console.print(f"[cyan]Reloading model: {model}[/cyan]")
     try:
         resp = httpx.post(url, json={"model": model}, timeout=300)
