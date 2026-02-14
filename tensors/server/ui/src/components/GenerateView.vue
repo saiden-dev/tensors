@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, reactive } from 'vue'
 import { useAppStore } from '@/stores/app'
 import * as api from '@/api/client'
 import type { GeneratedImage } from '@/types'
@@ -58,12 +58,12 @@ async function generate() {
   const { width, height } = store.resolution
   const paramsStr = `${width}×${height}, ${store.steps} steps${store.batchSize > 1 ? `, batch ${store.batchSize}` : ''}${store.selectedLora ? ', +LoRA' : ''}`
 
-  const message: ChatMessage = {
+  const message = reactive<ChatMessage>({
     prompt: currentPrompt,
     params: paramsStr,
     images: [],
     loading: true,
-  }
+  })
   messages.value.push(message)
 
   try {
