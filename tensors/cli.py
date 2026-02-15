@@ -48,6 +48,18 @@ from tensors.safetensor import compute_sha256, get_base_name, read_safetensor_me
 # Key masking threshold
 MIN_KEY_LENGTH_FOR_MASKING = 8
 
+# Size threshold for GB display
+_MB_PER_GB = 1024
+
+
+def _format_size_mb(size_mb: float | None) -> str:
+    """Format size in MB to human-readable string."""
+    if not size_mb:
+        return ""
+    if size_mb >= _MB_PER_GB:
+        return f"{size_mb / _MB_PER_GB:.1f} GB"
+    return f"{size_mb:.0f} MB"
+
 
 def _version_callback(value: bool) -> None:
     if value:
@@ -1016,16 +1028,25 @@ def models_list(
         return
 
     table = Table(title="Available Models", show_header=True, header_style="bold magenta")
-    table.add_column("Status", style="dim", width=3)
+    table.add_column("ID", style="dim", width=8)
     table.add_column("Name", style="cyan")
-    table.add_column("Path", style="dim")
+    table.add_column("File", style="white")
+    table.add_column("Size", style="green", justify="right")
 
     for model in models:
         path = model.get("path", "")
         name = model.get("name", Path(path).stem if path else "")
         is_active = active in {path, name}
-        status = "[green]✓[/green]" if is_active else ""
-        table.add_row(status, name, path)
+
+        civitai_id = model.get("civitai_model_id")
+        id_str = str(civitai_id) if civitai_id else ""
+        display_name = model.get("display_name", name)
+        if is_active:
+            display_name = f"[green]✓[/green] {display_name}"
+        filename = model.get("filename", Path(path).name if path else "")
+        size_str = _format_size_mb(model.get("size_mb"))
+
+        table.add_row(id_str, display_name, filename, size_str)
 
     console.print(table)
 
@@ -1091,13 +1112,22 @@ def models_loras(
         return
 
     table = Table(title="Available LoRAs", show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="dim", width=8)
     table.add_column("Name", style="cyan")
-    table.add_column("Path", style="dim")
+    table.add_column("File", style="white")
+    table.add_column("Size", style="green", justify="right")
 
     for lora in loras:
         path = lora.get("path", "")
         name = lora.get("name", Path(path).stem if path else "")
-        table.add_row(name, path)
+
+        civitai_id = lora.get("civitai_model_id")
+        id_str = str(civitai_id) if civitai_id else ""
+        display_name = lora.get("display_name", name)
+        filename = lora.get("filename", Path(path).name if path else "")
+        size_str = _format_size_mb(lora.get("size_mb"))
+
+        table.add_row(id_str, display_name, filename, size_str)
 
     console.print(table)
 

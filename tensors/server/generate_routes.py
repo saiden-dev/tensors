@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import logging
 import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -55,8 +56,16 @@ class GenerateRequest(PydanticBaseModel):
 
 def _build_sd_request(req: GenerateRequest) -> dict[str, Any]:
     """Build request body for sd-server."""
+    prompt = req.prompt
+
+    # sd-server expects LoRA in prompt as <lora:name:weight> syntax
+    if req.lora:
+        lora_name = Path(req.lora.path).stem
+        lora_tag = f"<lora:{lora_name}:{req.lora.multiplier}>"
+        prompt = f"{prompt} {lora_tag}"
+
     body: dict[str, Any] = {
-        "prompt": req.prompt,
+        "prompt": prompt,
         "negative_prompt": req.negative_prompt,
         "width": req.width,
         "height": req.height,
@@ -69,9 +78,6 @@ def _build_sd_request(req: GenerateRequest) -> dict[str, Any]:
         body["sampler_name"] = req.sampler_name
     if req.scheduler:
         body["scheduler"] = req.scheduler
-    # sd-server expects LoRA as JSON array, not in prompt
-    if req.lora:
-        body["lora"] = [{"path": req.lora.path, "multiplier": req.lora.multiplier}]
     return body
 
 
