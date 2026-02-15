@@ -1,29 +1,31 @@
-# Build stage
-FROM saiden/tengu:python-3.12-dev AS builder
+# Tensors + ComfyUI for RTX 5090 / CUDA 12.8
+FROM madiator2011/better-comfyui:slim-5090
 
-WORKDIR /app
+WORKDIR /workspace
 
-# Copy everything needed for the package
-COPY . .
+# ComfyUI is pre-installed in base image at /workspace/ComfyUI
+# Install ComfyUI Manager
+RUN cd /workspace/ComfyUI/custom_nodes && \
+    git clone https://github.com/ltdrdata/ComfyUI-Manager.git && \
+    cd ComfyUI-Manager && \
+    pip install -r requirements.txt
 
-# Install dependencies and package
-RUN uv pip install --system -e '.[server]'
+# Install tensors with server dependencies
+COPY . /tmp/tensors
+RUN pip install /tmp/tensors'[server]' && \
+    rm -rf /tmp/tensors
 
-# Runtime stage
-FROM saiden/tengu:python-3.12
+# Configure tensors for ComfyUI paths
+RUN mkdir -p /root/.config/tensors && \
+    echo '[paths]' > /root/.config/tensors/config.toml && \
+    echo 'models_dir = "/workspace/ComfyUI/models"' >> /root/.config/tensors/config.toml && \
+    echo 'checkpoints = "/workspace/ComfyUI/models/checkpoints"' >> /root/.config/tensors/config.toml && \
+    echo 'loras = "/workspace/ComfyUI/models/loras"' >> /root/.config/tensors/config.toml && \
+    echo 'vae = "/workspace/ComfyUI/models/vae"' >> /root/.config/tensors/config.toml && \
+    echo 'embeddings = "/workspace/ComfyUI/models/embeddings"' >> /root/.config/tensors/config.toml
 
-WORKDIR /app
+# Expose ports: ComfyUI (8188), tensors API (8080)
+EXPOSE 8188 8080
 
-# Copy installed packages from builder
-COPY --from=builder /usr/local/lib/python3.12 /usr/local/lib/python3.12
-COPY --from=builder /usr/local/bin /usr/local/bin
-
-# Copy app source
-COPY --from=builder /app /app
-
-# Set environment
-ENV PATH="/usr/local/bin:$PATH"
-
-EXPOSE 5000
-
-CMD ["tsr", "serve", "--host", "0.0.0.0", "--port", "5000", "--sd-server", "http://172.17.0.1:1234"]
+# Default: start ComfyUI (override with docker run command for tensors serve)
+CMD ["python", "/workspace/ComfyUI/main.py", "--listen", "0.0.0.0", "--port", "8188"]
