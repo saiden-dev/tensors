@@ -47,6 +47,29 @@ from tensors.safetensor import compute_sha256, get_base_name, read_safetensor_me
 MIN_KEY_LENGTH_FOR_MASKING = 8
 
 
+def _cache_model_quietly(model_data: dict[str, Any]) -> None:
+    """Cache model data to database without output."""
+    try:
+        with Database() as db:
+            db.init_schema()
+            db.cache_model(model_data)
+    except Exception:
+        pass  # Silently ignore cache failures
+
+
+def _cache_models_quietly(models: list[dict[str, Any]]) -> None:
+    """Cache multiple models to database without output."""
+    if not models:
+        return
+    try:
+        with Database() as db:
+            db.init_schema()
+            for model_data in models:
+                db.cache_model(model_data)
+    except Exception:
+        pass  # Silently ignore cache failures
+
+
 def _version_callback(value: bool) -> None:
     if value:
         print(f"tsr {version('tensors')}")
@@ -225,6 +248,9 @@ def search(
         console.print("[red]Search failed.[/red]")
         raise typer.Exit(1)
 
+    # Auto-cache search results
+    _cache_models_quietly(results.get("items", []))
+
     if json_output:
         console.print_json(data=results)
     else:
@@ -237,6 +263,7 @@ def get(
     version: Annotated[bool, typer.Option("-v", "--version", help="Treat ID as version ID instead of model ID")] = False,
     api_key: Annotated[str | None, typer.Option("--api-key", help="CivitAI API key")] = None,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+    no_cache: Annotated[bool, typer.Option("--no-cache", help="Don't cache to local database")] = False,
 ) -> None:
     """Fetch model information from CivitAI by model ID or version ID."""
     key = api_key or load_api_key()
@@ -247,6 +274,14 @@ def get(
             console.print(f"[red]Error: Version {id_value} not found on CivitAI.[/red]")
             raise typer.Exit(1)
 
+        # Auto-cache version data (need to fetch full model for complete cache)
+        if not no_cache:
+            model_id = version_data.get("modelId")
+            if model_id:
+                model_data = fetch_civitai_model(model_id, key)
+                if model_data:
+                    _cache_model_quietly(model_data)
+
         if json_output:
             console.print_json(data=version_data)
         else:
@@ -256,6 +291,10 @@ def get(
         if not model_data:
             console.print(f"[red]Error: Model {id_value} not found on CivitAI.[/red]")
             raise typer.Exit(1)
+
+        # Auto-cache model data
+        if not no_cache:
+            _cache_model_quietly(model_data)
 
         if json_output:
             console.print_json(data=model_data)
