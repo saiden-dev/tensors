@@ -453,6 +453,7 @@ def config(
 def generate(
     prompt: Annotated[str, typer.Argument(help="Text prompt for image generation.")],
     remote: Annotated[str | None, typer.Option("-r", "--remote", help="Remote server name or URL")] = None,
+    model: Annotated[str | None, typer.Option("-m", "--model", help="Checkpoint model (remote mode only).")] = None,
     host: Annotated[str, typer.Option(help="sd-server address (local mode).")] = "127.0.0.1",
     port: Annotated[int, typer.Option(help="sd-server port (local mode).")] = 8080,
     output: Annotated[str, typer.Option("-o", help="Output directory (local mode).")] = ".",
@@ -475,6 +476,11 @@ def generate(
         # Remote mode: use TsrClient API
         try:
             with TsrClient(remote_url) as client:
+                # Switch model if specified
+                if model:
+                    console.print(f"[cyan]Switching to model: {model}[/cyan]")
+                    client.switch_model(model)
+
                 console.print(f"[cyan]Generating {batch_size} image(s) on {remote_url}...[/cyan]")
                 result = client.generate(
                     prompt=prompt,
@@ -501,6 +507,9 @@ def generate(
             console.print(f"[green]Generated:[/green] {img.get('id', 'unknown')}")
     else:
         # Local mode: direct sd-server connection
+        if model:
+            console.print("[yellow]Warning: --model ignored in local mode (sd-server loads model at startup)[/yellow]")
+
         from tensors.generate import SDClient, Txt2ImgParams, save_images  # noqa: PLC0415
 
         params = Txt2ImgParams(
@@ -1322,6 +1331,8 @@ def comfy_generate(
     prompt: Annotated[str, typer.Argument(help="Text prompt for generation")],
     url: Annotated[str, typer.Option("--url", "-u", help="ComfyUI server URL")] = COMFY_DEFAULT_URL,
     checkpoint: Annotated[str | None, typer.Option("-m", "--model", help="Checkpoint model name")] = None,
+    lora: Annotated[str | None, typer.Option("--lora", "-l", help="LoRA name")] = None,
+    lora_strength: Annotated[float, typer.Option("--lora-strength", help="LoRA strength")] = 0.8,
     negative: Annotated[str, typer.Option("-n", "--negative", help="Negative prompt")] = "",
     width: Annotated[int, typer.Option("-W", "--width", help="Image width")] = 512,
     height: Annotated[int, typer.Option("-H", "--height", help="Image height")] = 512,
@@ -1330,35 +1341,68 @@ def comfy_generate(
     seed: Annotated[int, typer.Option("-s", "--seed", help="RNG seed (-1 for random)")] = -1,
     sampler: Annotated[str, typer.Option("--sampler", help="Sampler name")] = "euler_ancestral",
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Output file path")] = None,
+    no_restart: Annotated[bool, typer.Option("--no-restart", help="Don't auto-restart on model change")] = False,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
 ) -> None:
     """Generate an image using ComfyUI."""
+    from rich.progress import BarColumn, Progress, SpinnerColumn, TaskProgressColumn, TextColumn  # noqa: PLC0415
+
     from tensors.comfy import ComfyClient  # noqa: PLC0415
+
+    progress_task = None
+    progress_ctx = None
+
+    def on_status(msg: str) -> None:
+        console.print(f"[cyan]{msg}[/cyan]")
+
+    def on_progress(current: int, total: int, stage: str) -> None:  # noqa: ARG001
+        nonlocal progress_task, progress_ctx
+        if progress_ctx is None:
+            progress_ctx = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console,
+            )
+            progress_ctx.start()
+            progress_task = progress_ctx.add_task("Sampling", total=total)
+        if progress_task is not None:
+            progress_ctx.update(progress_task, completed=current)
 
     try:
         client = ComfyClient(url)
 
-        console.print(f"[cyan]Generating with ComfyUI at {url}...[/cyan]")
+        console.print(f"[dim]ComfyUI: {url}[/dim]")
         result = client.generate(
             prompt=prompt,
             negative_prompt=negative,
             checkpoint=checkpoint,
+            lora=lora,
+            lora_strength=lora_strength,
             width=width,
             height=height,
             steps=steps,
             cfg=cfg,
             seed=seed,
             sampler=sampler,
+            on_status=on_status,
+            on_progress=on_progress,
+            auto_restart=not no_restart,
         )
     except Exception as e:
         console.print(f"[red]Error: {e}[/red]")
         raise typer.Exit(1) from e
+    finally:
+        if progress_ctx:
+            progress_ctx.stop()
 
     if json_output:
         console.print_json(data=result)
         return
 
-    console.print(f"[green]Generated![/green] Seed: {result['seed']}, Checkpoint: {result['checkpoint']}")
+    lora_info = f", LoRA: {result['lora']}" if result.get("lora") else ""
+    console.print(f"[green]Generated![/green] Seed: {result['seed']}, Checkpoint: {result['checkpoint']}{lora_info}")
 
     if result["images"]:
         img_info = result["images"][0]
