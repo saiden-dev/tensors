@@ -1,25 +1,18 @@
 <script setup lang="ts">
-import { ref, computed, onUnmounted } from 'vue'
+import { ref, computed } from 'vue'
 import type { CivitaiModel } from '@/types'
-import type { DownloadStatus } from '@/api/client'
 import * as api from '@/api/client'
+import { useAppStore } from '@/stores/app'
 
 const props = defineProps<{
   model: CivitaiModel
 }>()
 
+const store = useAppStore()
+
 const showDialog = ref(false)
 const loadingDetails = ref(false)
 const modelDetails = ref<CivitaiModel | null>(null)
-
-// Download tracking
-const activeDownload = ref<DownloadStatus | null>(null)
-const downloadingVersionId = ref<number | null>(null)
-let pollInterval: ReturnType<typeof setInterval> | null = null
-
-onUnmounted(() => {
-  if (pollInterval) clearInterval(pollInterval)
-})
 
 const previewImage = computed(() => {
   const version = props.model.modelVersions?.[0]
@@ -53,41 +46,12 @@ async function openDetails() {
 }
 
 async function downloadVersion(versionId: number) {
-  if (downloadingVersionId.value === versionId) return // Already downloading
+  if (store.isDownloading(versionId)) return // Already downloading
   if (!confirm(`Download "${props.model.name}" to the server?`)) return
 
-  try {
-    downloadingVersionId.value = versionId
-    const response = await api.downloadModel(undefined, versionId)
-
-    // Start polling for progress
-    const downloadId = response.download_id
-    pollInterval = setInterval(async () => {
-      try {
-        const status = await api.getDownloadStatus(downloadId)
-        activeDownload.value = status
-
-        if (status.status === 'completed' || status.status === 'failed') {
-          if (pollInterval) clearInterval(pollInterval)
-          pollInterval = null
-
-          if (status.status === 'failed') {
-            alert('Download failed: ' + (status.error || 'Unknown error'))
-          }
-
-          // Keep showing completed state briefly, then clear
-          setTimeout(() => {
-            activeDownload.value = null
-            downloadingVersionId.value = null
-          }, 3000)
-        }
-      } catch (e) {
-        console.error('Failed to get download status:', e)
-      }
-    }, 500)
-  } catch (e: any) {
-    alert('Download failed: ' + e.message)
-    downloadingVersionId.value = null
+  const downloadId = await store.startDownload(versionId)
+  if (!downloadId) {
+    alert('Failed to start download')
   }
 }
 </script>
@@ -144,26 +108,17 @@ async function downloadVersion(versionId: number) {
       </span>
       <v-spacer />
       <!-- Download progress or button -->
-      <template v-if="downloadingVersionId === model.modelVersions?.[0]?.id && activeDownload">
+      <template v-if="store.isDownloading(model.modelVersions?.[0]?.id || 0)">
         <div class="download-progress">
           <v-progress-linear
-            :model-value="activeDownload.progress || 0"
-            :indeterminate="activeDownload.status === 'queued'"
-            :color="activeDownload.status === 'completed' ? 'success' : 'primary'"
+            :model-value="store.getDownloadProgress(model.modelVersions?.[0]?.id || 0)?.progress || 0"
+            :indeterminate="store.getDownloadProgress(model.modelVersions?.[0]?.id || 0)?.status === 'queued'"
+            color="primary"
             height="6"
             rounded
           />
           <span class="text-caption text-grey">
-            <template v-if="activeDownload.status === 'completed'">
-              Done!
-            </template>
-            <template v-else-if="activeDownload.status === 'queued'">
-              Queued...
-            </template>
-            <template v-else>
-              {{ activeDownload.downloaded_str }} / {{ activeDownload.total_str }}
-              <span class="text-primary ml-1">{{ activeDownload.speed_str }}</span>
-            </template>
+            {{ store.getDownloadProgress(model.modelVersions?.[0]?.id || 0)?.progress?.toFixed(0) || 0 }}%
           </span>
         </div>
       </template>
@@ -254,17 +209,17 @@ async function downloadVersion(versionId: number) {
                 <v-list-item-title>{{ version.name }}</v-list-item-title>
                 <v-list-item-subtitle>{{ version.baseModel }}</v-list-item-subtitle>
                 <template #append>
-                  <template v-if="downloadingVersionId === version.id && activeDownload">
+                  <template v-if="store.isDownloading(version.id)">
                     <div class="download-progress-dialog">
                       <v-progress-linear
-                        :model-value="activeDownload.progress || 0"
-                        :indeterminate="activeDownload.status === 'queued'"
-                        :color="activeDownload.status === 'completed' ? 'success' : 'primary'"
+                        :model-value="store.getDownloadProgress(version.id)?.progress || 0"
+                        :indeterminate="store.getDownloadProgress(version.id)?.status === 'queued'"
+                        color="primary"
                         height="6"
                         rounded
                       />
                       <span class="text-caption text-grey">
-                        {{ activeDownload.progress?.toFixed(0) || 0 }}%
+                        {{ store.getDownloadProgress(version.id)?.progress?.toFixed(0) || 0 }}%
                       </span>
                     </div>
                   </template>

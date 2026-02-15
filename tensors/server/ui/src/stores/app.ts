@@ -1,11 +1,17 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Model, LoRA, ResolutionPreset } from '@/types'
+import type { DownloadStatus } from '@/api/client'
 import * as api from '@/api/client'
 
 export const useAppStore = defineStore('app', () => {
   // Navigation
   const currentView = ref<'generate' | 'search' | 'gallery'>('generate')
+
+  // Downloads
+  const downloads = ref<DownloadStatus[]>([])
+  const showDownloadsPanel = ref(false)
+  let downloadPollInterval: ReturnType<typeof setInterval> | null = null
 
   // Models
   const models = ref<Model[]>([])
@@ -97,6 +103,57 @@ export const useAppStore = defineStore('app', () => {
     }
   }
 
+  // Downloads - computed
+  const activeDownloads = computed(() =>
+    downloads.value.filter(d => d.status === 'downloading' || d.status === 'queued')
+  )
+  const hasActiveDownloads = computed(() => activeDownloads.value.length > 0)
+
+  // Downloads - actions
+  async function pollDownloads() {
+    try {
+      const res = await api.getActiveDownloads()
+      downloads.value = res.downloads || []
+    } catch (e) {
+      console.error('Failed to poll downloads:', e)
+    }
+  }
+
+  function startDownloadPolling() {
+    if (downloadPollInterval) return
+    pollDownloads() // Initial fetch
+    downloadPollInterval = setInterval(pollDownloads, 1000)
+  }
+
+  function stopDownloadPolling() {
+    if (downloadPollInterval) {
+      clearInterval(downloadPollInterval)
+      downloadPollInterval = null
+    }
+  }
+
+  async function startDownload(versionId: number): Promise<string | null> {
+    try {
+      const response = await api.downloadModel(undefined, versionId)
+      startDownloadPolling()
+      showDownloadsPanel.value = true
+      return response.download_id
+    } catch (e: any) {
+      console.error('Failed to start download:', e)
+      return null
+    }
+  }
+
+  function isDownloading(versionId: number): boolean {
+    return downloads.value.some(
+      d => d.version_id === versionId && (d.status === 'downloading' || d.status === 'queued')
+    )
+  }
+
+  function getDownloadProgress(versionId: number): DownloadStatus | undefined {
+    return downloads.value.find(d => d.version_id === versionId)
+  }
+
   async function switchModel(modelPath: string) {
     if (modelPath === activeModel.value) return
 
@@ -169,8 +226,20 @@ export const useAppStore = defineStore('app', () => {
     switchMessage,
     switchError,
 
+    // Downloads
+    downloads,
+    activeDownloads,
+    hasActiveDownloads,
+    showDownloadsPanel,
+
     // Actions
     loadModels,
     switchModel,
+    startDownload,
+    pollDownloads,
+    startDownloadPolling,
+    stopDownloadPolling,
+    isDownloading,
+    getDownloadProgress,
   }
 })
