@@ -23,7 +23,16 @@ from rich.progress import (
     TransferSpeedColumn,
 )
 
-from tensors.config import CIVITAI_API_BASE, CIVITAI_DOWNLOAD_BASE, BaseModel, ModelType, SortOrder
+from tensors.config import (
+    CIVITAI_API_BASE,
+    CIVITAI_DOWNLOAD_BASE,
+    BaseModel,
+    CommercialUse,
+    ModelType,
+    NsfwLevel,
+    Period,
+    SortOrder,
+)
 
 if TYPE_CHECKING:
     from rich.console import Console
@@ -135,15 +144,39 @@ def _build_search_params(
     base_model: BaseModel | None,
     sort: SortOrder,
     limit: int,
+    *,
+    period: Period | None = None,
+    nsfw: NsfwLevel | bool | None = None,
+    tag: str | None = None,
+    username: str | None = None,
+    page: int | None = None,
+    commercial_use: CommercialUse | None = None,
+    allow_derivatives: bool | None = None,
+    primary_file_only: bool = False,
 ) -> tuple[dict[str, Any], bool]:
-    """Build search parameters and return (params, has_filters)."""
+    """Build search parameters and return (params, has_filters).
+
+    API Quirks / Workarounds:
+    - query + filters don't work reliably together → we fetch more and filter client-side
+    - nsfw=true is required to include NSFW content (default excludes it)
+    - baseModels is undocumented but works
+    """
     params: dict[str, Any] = {
         "limit": min(limit, 100),
-        "nsfw": "true",
     }
 
+    # NSFW handling - default to including all content
+    if nsfw is None:
+        params["nsfw"] = "true"  # Include NSFW by default (like website)
+    elif isinstance(nsfw, bool):
+        params["nsfw"] = str(nsfw).lower()
+    elif nsfw == NsfwLevel.none:
+        params["nsfw"] = "false"  # Exclude NSFW
+    else:
+        params["nsfw"] = "true"  # Include for specific levels (API filters server-side)
+
     # API quirk: query + filters don't work reliably together
-    has_filters = model_type is not None or base_model is not None
+    has_filters = model_type is not None or base_model is not None or tag is not None
 
     if query and not has_filters:
         params["query"] = query
@@ -155,6 +188,28 @@ def _build_search_params(
         params["baseModels"] = base_model.to_api()
 
     params["sort"] = sort.to_api()
+
+    # Additional filters
+    if period:
+        params["period"] = period.to_api()
+
+    if tag:
+        params["tag"] = tag
+
+    if username:
+        params["username"] = username
+
+    if page and page > 1:
+        params["page"] = page
+
+    if commercial_use:
+        params["allowCommercialUse"] = commercial_use.to_api()
+
+    if allow_derivatives is not None:
+        params["allowDerivatives"] = str(allow_derivatives).lower()
+
+    if primary_file_only:
+        params["primaryFileOnly"] = "true"
 
     # Request more if we need client-side filtering
     if query and has_filters:
@@ -179,9 +234,37 @@ def search_civitai(
     limit: int,
     api_key: str | None,
     console: Console,
+    *,
+    period: Period | None = None,
+    nsfw: NsfwLevel | bool | None = None,
+    tag: str | None = None,
+    username: str | None = None,
+    page: int | None = None,
+    commercial_use: CommercialUse | None = None,
+    allow_derivatives: bool | None = None,
+    primary_file_only: bool = False,
 ) -> dict[str, Any] | None:
-    """Search CivitAI models."""
-    params, has_filters = _build_search_params(query, model_type, base_model, sort, limit)
+    """Search CivitAI models.
+
+    Implements workarounds for API limitations:
+    - Query + filters: fetches more results and filters client-side
+    - NSFW: defaults to including all content (like website behavior)
+    """
+    params, has_filters = _build_search_params(
+        query,
+        model_type,
+        base_model,
+        sort,
+        limit,
+        period=period,
+        nsfw=nsfw,
+        tag=tag,
+        username=username,
+        page=page,
+        commercial_use=commercial_use,
+        allow_derivatives=allow_derivatives,
+        primary_file_only=primary_file_only,
+    )
     url = f"{CIVITAI_API_BASE}/models"
 
     with Progress(

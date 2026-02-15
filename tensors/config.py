@@ -50,6 +50,13 @@ class ModelType(str, Enum):
     vae = "vae"
     controlnet = "controlnet"
     locon = "locon"
+    hypernetwork = "hypernetwork"
+    poses = "poses"
+    upscaler = "upscaler"
+    motionmodule = "motionmodule"
+    wildcards = "wildcards"
+    workflows = "workflows"
+    other = "other"
 
     def to_api(self) -> str:
         """Convert to CivitAI API value."""
@@ -60,6 +67,13 @@ class ModelType(str, Enum):
             "vae": "VAE",
             "controlnet": "Controlnet",
             "locon": "LoCon",
+            "hypernetwork": "Hypernetwork",
+            "poses": "Poses",
+            "upscaler": "Upscaler",
+            "motionmodule": "MotionModule",
+            "wildcards": "Wildcards",
+            "workflows": "Workflows",
+            "other": "Other",
         }
         return mapping[self.value]
 
@@ -67,20 +81,55 @@ class ModelType(str, Enum):
 class BaseModel(str, Enum):
     """Common base models."""
 
+    # Stable Diffusion 1.x
+    sd14 = "sd14"
     sd15 = "sd15"
+    sd15_lcm = "sd15_lcm"
+    sd15_hyper = "sd15_hyper"
+    # Stable Diffusion 2.x
+    sd20 = "sd20"
+    sd21 = "sd21"
+    # SDXL variants
     sdxl = "sdxl"
+    sdxl_turbo = "sdxl_turbo"
+    sdxl_lightning = "sdxl_lightning"
+    sdxl_hyper = "sdxl_hyper"
+    # Pony / Illustrious
     pony = "pony"
-    flux = "flux"
     illustrious = "illustrious"
+    # Flux variants
+    flux_dev = "flux_dev"
+    flux_schnell = "flux_schnell"
+    # SD 3.x
+    sd35_large = "sd35_large"
+    sd35_medium = "sd35_medium"
+    # Other
+    cascade = "cascade"
+    svd = "svd"
+    other = "other"
 
     def to_api(self) -> str:
         """Convert to CivitAI API value."""
         mapping = {
+            "sd14": "SD 1.4",
             "sd15": "SD 1.5",
+            "sd15_lcm": "SD 1.5 LCM",
+            "sd15_hyper": "SD 1.5 Hyper",
+            "sd20": "SD 2.0",
+            "sd21": "SD 2.1",
             "sdxl": "SDXL 1.0",
+            "sdxl_turbo": "SDXL Turbo",
+            "sdxl_lightning": "SDXL Lightning",
+            "sdxl_hyper": "SDXL Hyper",
             "pony": "Pony",
-            "flux": "Flux.1 D",
             "illustrious": "Illustrious",
+            "flux_dev": "Flux.1 D",
+            "flux_schnell": "Flux.1 S",
+            "sd35_large": "SD 3.5 Large",
+            "sd35_medium": "SD 3.5 Medium",
+            "cascade": "Stable Cascade",
+            "svd": "SVD",
+            "other": "Other",
         }
         return mapping[self.value]
 
@@ -100,6 +149,55 @@ class SortOrder(str, Enum):
             "newest": "Newest",
         }
         return mapping[self.value]
+
+
+class Period(str, Enum):
+    """Time period for sorting/filtering."""
+
+    all = "all"
+    year = "year"
+    month = "month"
+    week = "week"
+    day = "day"
+
+    def to_api(self) -> str:
+        """Convert to CivitAI API value."""
+        mapping = {
+            "all": "AllTime",
+            "year": "Year",
+            "month": "Month",
+            "week": "Week",
+            "day": "Day",
+        }
+        return mapping[self.value]
+
+
+class NsfwLevel(str, Enum):
+    """NSFW content filter level."""
+
+    none = "none"
+    soft = "soft"
+    mature = "mature"
+    x = "x"
+
+    def to_api(self) -> str:
+        """Convert to CivitAI API value."""
+        # For models endpoint, this maps to the nsfw param
+        # none = exclude NSFW, others = specific levels
+        return self.value.capitalize() if self.value != "none" else "None"
+
+
+class CommercialUse(str, Enum):
+    """Commercial use permissions."""
+
+    none = "none"
+    image = "image"
+    rent = "rent"
+    sell = "sell"
+
+    def to_api(self) -> str:
+        """Convert to CivitAI API value."""
+        return self.value.capitalize()
 
 
 # ============================================================================

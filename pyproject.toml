@@ -60,6 +60,7 @@ select = [
     "RUF",    # ruff-specific
 ]
 ignore = [
+    "PLR0912",  # Too many branches - search param building needs many conditionals
     "PLR0913",  # Too many arguments - CLI commands need many options
 ]
 

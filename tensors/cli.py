@@ -22,7 +22,10 @@ from tensors.api import (
 from tensors.config import (
     CONFIG_FILE,
     BaseModel,
+    CommercialUse,
     ModelType,
+    NsfwLevel,
+    Period,
     SortOrder,
     get_default_output_path,
     load_api_key,
@@ -177,11 +180,30 @@ def search(
     base: Annotated[BaseModel | None, typer.Option("-b", "--base", help="Base model filter")] = None,
     sort: Annotated[SortOrder, typer.Option("-s", "--sort", help="Sort order")] = SortOrder.downloads,
     limit: Annotated[int, typer.Option("-n", "--limit", help="Max results")] = 20,
+    period: Annotated[Period | None, typer.Option("-p", "--period", help="Time period")] = None,
+    tag: Annotated[str | None, typer.Option("--tag", help="Filter by tag")] = None,
+    username: Annotated[str | None, typer.Option("-u", "--user", help="Filter by creator")] = None,
+    page: Annotated[int | None, typer.Option("--page", help="Page number")] = None,
+    nsfw: Annotated[NsfwLevel | None, typer.Option("--nsfw", help="NSFW filter level")] = None,
+    sfw: Annotated[bool, typer.Option("--sfw", help="Exclude NSFW content")] = False,
+    commercial: Annotated[CommercialUse | None, typer.Option("--commercial", help="Commercial use filter")] = None,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
     api_key: Annotated[str | None, typer.Option("--api-key", help="CivitAI API key")] = None,
 ) -> None:
-    """Search CivitAI models."""
+    """Search CivitAI models.
+
+    Examples:
+        tsr search "anime"                    # Search by name
+        tsr search -t lora -b pony            # LoRAs for Pony
+        tsr search --tag anime -b illustrious # Tag + base model
+        tsr search -u "username"              # By creator
+        tsr search -p week -s newest          # New this week
+        tsr search --sfw                      # Exclude NSFW
+    """
     key = api_key or load_api_key()
+
+    # Handle SFW flag
+    nsfw_filter: NsfwLevel | bool | None = NsfwLevel.none if sfw else nsfw
 
     results = search_civitai(
         query=query,
@@ -191,6 +213,12 @@ def search(
         limit=limit,
         api_key=key,
         console=console,
+        period=period,
+        nsfw=nsfw_filter,
+        tag=tag,
+        username=username,
+        page=page,
+        commercial_use=commercial,
     )
 
     if not results:
