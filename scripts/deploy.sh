@@ -46,4 +46,4 @@ fi
 
 echo ""
 echo "==> Deploy complete!"
-echo "    API: http://junkpile:8081"
+echo "    API: http://junkpile:51200"

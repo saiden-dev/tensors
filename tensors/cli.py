@@ -401,7 +401,7 @@ def config(
 @app.command()
 def serve(
     host: Annotated[str, typer.Option(help="Listen address.")] = "127.0.0.1",
-    port: Annotated[int, typer.Option(help="Listen port.")] = 8080,
+    port: Annotated[int, typer.Option(help="Listen port.")] = 51200,
     log_level: Annotated[str, typer.Option(help="Log level.")] = "info",
 ) -> None:
     """Start the tensors server (gallery and CivitAI management)."""

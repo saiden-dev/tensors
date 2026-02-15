@@ -44,11 +44,11 @@ done
 echo "ComfyUI ready"
 
 # Start tensors API (exposed)
-exec tsr serve --host 0.0.0.0 --port 8080
+exec tsr serve --host 0.0.0.0 --port 51200
 EOF
 RUN chmod +x /workspace/start.sh
 
 # Only expose tensors API
-EXPOSE 8080
+EXPOSE 51200
 
 CMD ["/workspace/start.sh"]

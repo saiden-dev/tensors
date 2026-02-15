@@ -23,7 +23,7 @@ Run the deploy script:
 | Install path | `/opt/tensors/app` |
 | Venv | `/opt/tensors/venv` |
 | Service | `tensors.service` |
-| Port | 8081 |
+| Port | 51200 |
 
 ## API Endpoints
 

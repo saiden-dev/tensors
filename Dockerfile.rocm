@@ -1,28 +1,78 @@
-# Tensors + ComfyUI for AMD ROCm (local testing)
-# tensors API exposed, ComfyUI internal only
+# Tensors + ComfyUI for AMD ROCm (gfx1030 only - slimmed)
+# Multi-stage build, strips unused GPU architectures
+
+# ============================================================================
+# STAGE 1: Builder - install everything
+# ============================================================================
+FROM saiden/sd-rocm AS builder
+
+WORKDIR /workspace
+
+# Install build deps
+RUN apt-get update && apt-get install -y --no-install-recommends git curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install ComfyUI (skip torch - use base image's ROCm torch)
+# Filter out torch ecosystem, install deps without pulling CUDA
+RUN git clone --depth 1 https://github.com/comfyanonymous/ComfyUI.git && \
+    cd ComfyUI && \
+    grep -v "^torch" requirements.txt | \
+    grep -v "^torchvision" | \
+    grep -v "^torchaudio" | \
+    grep -v "^torchsde" | \
+    grep -v "^nvidia" | \
+    grep -v "^triton" > requirements-no-torch.txt && \
+    pip install --break-system-packages --no-cache-dir -r requirements-no-torch.txt && \
+    pip install --break-system-packages --no-cache-dir --no-deps torchsde && \
+    pip install --break-system-packages --no-cache-dir trampoline scipy && \
+    # Remove any nvidia packages that snuck in
+    pip uninstall -y nvidia-cublas-cu12 nvidia-cuda-runtime-cu12 nvidia-cudnn-cu12 \
+        nvidia-cufft-cu12 nvidia-curand-cu12 nvidia-cusolver-cu12 nvidia-cusparse-cu12 \
+        nvidia-nccl-cu12 nvidia-nvjitlink-cu12 nvidia-nvtx-cu12 nvidia-nvshmem-cu12 \
+        triton 2>/dev/null || true && \
+    rm -rf .git .github tests* notebooks *.md
+
+# Install ComfyUI Manager
+RUN cd /workspace/ComfyUI/custom_nodes && \
+    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Manager.git && \
+    cd ComfyUI-Manager && \
+    pip install --break-system-packages --no-cache-dir -r requirements.txt && \
+    rm -rf .git .github tests *.md
+
+# Install tensors
+COPY . /tmp/tensors
+RUN pip install --break-system-packages --no-cache-dir /tmp/tensors'[server]' && \
+    rm -rf /tmp/tensors
+
+# ============================================================================
+# STAGE 2: Runtime - slim ROCm for gfx1030 only
+# ============================================================================
 FROM saiden/sd-rocm
 
 WORKDIR /workspace
 
-# Install git and curl
-RUN apt-get update && apt-get install -y --no-install-recommends git curl && \
-    rm -rf /var/lib/apt/lists/*
+# Strip unused GPU architectures (keep only gfx1030)
+# hipblaslt has NO gfx1030 support - remove entirely (saves 11GB)
+# rocblas - keep only gfx1030 kernels (saves 3.5GB)
+RUN rm -rf /opt/rocm*/lib/hipblaslt/library/* && \
+    find /opt/rocm*/lib/rocblas/library/ -type f \
+        ! -name '*gfx1030*' \
+        ! -name 'TensileLibrary.dat' \
+        ! -name 'TensileLibrary_lazy_gfx1030.dat' \
+        -delete && \
+    rm -rf /opt/rocm*/share/doc /opt/rocm*/share/html
 
-# Install ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git && \
-    cd ComfyUI && \
-    pip install --break-system-packages -r requirements.txt
+# Install only runtime deps
+RUN apt-get update && apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/* && \
+    apt-get clean
 
-# Install ComfyUI Manager
-RUN cd /workspace/ComfyUI/custom_nodes && \
-    git clone https://github.com/ltdrdata/ComfyUI-Manager.git && \
-    cd ComfyUI-Manager && \
-    pip install --break-system-packages -r requirements.txt
+# Copy Python packages from builder
+COPY --from=builder /usr/local/lib/python3.12/dist-packages /usr/local/lib/python3.12/dist-packages
+COPY --from=builder /usr/local/bin/tsr /usr/local/bin/tsr
 
-# Install tensors with server dependencies
-COPY . /tmp/tensors
-RUN pip install --break-system-packages /tmp/tensors'[server]' && \
-    rm -rf /tmp/tensors
+# Copy ComfyUI
+COPY --from=builder /workspace/ComfyUI /workspace/ComfyUI
 
 # Configure tensors
 RUN mkdir -p /root/.config/tensors && \
@@ -38,13 +88,15 @@ embeddings = "/workspace/ComfyUI/models/embeddings"
 url = "http://127.0.0.1:8188"
 EOF
 
-# Startup script: ComfyUI internal + tensors API exposed
+# Startup script
 RUN cat > /workspace/start.sh << 'EOF'
 #!/bin/bash
-# Start ComfyUI in background (internal only, localhost)
-python /workspace/ComfyUI/main.py --listen 127.0.0.1 --port 8188 &
+export HSA_OVERRIDE_GFX_VERSION=10.3.0
 
-# Wait for ComfyUI to be ready
+# Start ComfyUI in background (internal only)
+python3 /workspace/ComfyUI/main.py --listen 127.0.0.1 --port 8188 &
+
+# Wait for ComfyUI
 echo "Waiting for ComfyUI..."
 until curl -s http://127.0.0.1:8188/system_stats > /dev/null 2>&1; do
     sleep 1
@@ -52,11 +104,13 @@ done
 echo "ComfyUI ready"
 
 # Start tensors API (exposed)
-exec tsr serve --host 0.0.0.0 --port 8080
+exec tsr serve --host 0.0.0.0 --port 51200
 EOF
 RUN chmod +x /workspace/start.sh
 
-# Only expose tensors API
-EXPOSE 8080
+ENV HSA_OVERRIDE_GFX_VERSION=10.3.0
 
-CMD ["/workspace/start.sh"]
+EXPOSE 51200
+
+ENTRYPOINT []
+CMD ["/bin/bash", "/workspace/start.sh"]

@@ -117,7 +117,7 @@ Manage sd-server process via a REST API. Requires `pip install tensors[server]`.
 tsr serve --model /path/to/model.safetensors
 
 # Custom host and port
-tsr serve --model /path/to/model.safetensors --host 0.0.0.0 --port 8080
+tsr serve --model /path/to/model.safetensors --host 0.0.0.0 --port 51200
 
 # Check server status
 tsr status
@@ -196,7 +196,7 @@ Control a remote tsr server instead of local operations.
 
 ```bash
 # Configure a remote server
-tsr remote add junkpile http://junkpile:8080
+tsr remote add junkpile http://junkpile:51200
 
 # Set default remote
 tsr remote default junkpile
@@ -233,8 +233,8 @@ Config file: `~/.config/tensors/config.toml`
 civitai_key = "your-api-key"
 
 [remotes]
-junkpile = "http://junkpile:8080"
-local = "http://localhost:8080"
+junkpile = "http://junkpile:51200"
+local = "http://localhost:51200"
 
 # Optional: set default remote for all commands
 default_remote = "junkpile"
