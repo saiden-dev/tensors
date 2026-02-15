@@ -8,11 +8,6 @@ REMOTE="chi@junkpile"
 REMOTE_DIR="/opt/tensors/app"
 LOCAL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "==> Building UI..."
-cd "$LOCAL_DIR/tensors/server/ui"
-npm run build
-
-echo ""
 echo "==> Syncing Python code to junkpile..."
 rsync -av --delete \
   --exclude='.git' \
@@ -51,4 +46,4 @@ fi
 
 echo ""
 echo "==> Deploy complete!"
-echo "    Access: http://junkpile:8081"
+echo "    API: http://junkpile:8081"

@@ -1,6 +1,6 @@
 # Deploy Tensors to Junkpile
 
-Build, deploy, and restart tensors on junkpile with verification.
+Deploy tensors API server to junkpile.
 
 Run the deploy script:
 
@@ -10,11 +10,10 @@ Run the deploy script:
 
 ## What it does
 
-1. **Build UI** - Runs `npm run build` in `tensors/server/ui/`
-2. **Sync code** - Rsyncs Python code to `/opt/tensors/app/`
-3. **Fix permissions** - Sets ownership to `tensors:tensors`
-4. **Restart tensors** - Runs `sudo systemctl restart tensors`
-5. **Verify tensors** - Checks service is running
+1. **Sync code** - Rsyncs Python code to `/opt/tensors/app/`
+2. **Fix permissions** - Sets ownership to `tensors:tensors`
+3. **Restart tensors** - Runs `sudo systemctl restart tensors`
+4. **Verify tensors** - Checks service is running
 
 ## Service Structure
 
@@ -26,6 +25,10 @@ Run the deploy script:
 | Service | `tensors.service` |
 | Port | 8081 |
 
-## Access
+## API Endpoints
 
-- **Local**: http://junkpile:8081
+- `GET /status` - Health check
+- `GET /api/civitai/*` - CivitAI search and fetch
+- `GET /api/db/*` - Database management
+- `GET /api/images/*` - Image gallery
+- `POST /api/download` - Download models
