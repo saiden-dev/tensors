@@ -8,6 +8,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Annotated, Any
 
+import httpx
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -1198,6 +1199,177 @@ def remote_default(
         console.print("[green]Default remote cleared.[/green]")
 
 
+# =============================================================================
+# ComfyUI Commands
+# =============================================================================
+
+comfy_app = typer.Typer(
+    name="comfy",
+    help="ComfyUI client commands.",
+    no_args_is_help=True,
+)
+app.add_typer(comfy_app, name="comfy")
+
+COMFY_DEFAULT_URL = "http://junkpile:8188"
+
+
+@comfy_app.command("status")
+def comfy_status(
+    url: Annotated[str, typer.Option("--url", "-u", help="ComfyUI server URL")] = COMFY_DEFAULT_URL,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Show ComfyUI server status."""
+    try:
+        resp = httpx.get(f"{url}/system_stats", timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+    except httpx.HTTPError as e:
+        console.print(f"[red]Error: Cannot connect to ComfyUI at {url}: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data=data)
+        return
+
+    system = data.get("system", {})
+    devices = data.get("devices", [])
+
+    table = Table(title="ComfyUI Status", show_header=True, header_style="bold magenta")
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("URL", url)
+    table.add_row("Version", system.get("comfyui_version", "N/A"))
+    table.add_row("Python", system.get("python_version", "N/A").split()[0])
+    table.add_row("PyTorch", system.get("pytorch_version", "N/A"))
+    table.add_row("RAM Free", f"{system.get('ram_free', 0) / 1024**3:.1f} GB")
+
+    for dev in devices:
+        vram_free = dev.get("vram_free", 0) / 1024**3
+        vram_total = dev.get("vram_total", 0) / 1024**3
+        table.add_row(f"GPU {dev.get('index', 0)}", f"{dev.get('name', 'N/A')} ({vram_free:.1f}/{vram_total:.1f} GB free)")
+
+    console.print(table)
+
+
+@comfy_app.command("models")
+def comfy_models(
+    url: Annotated[str, typer.Option("--url", "-u", help="ComfyUI server URL")] = COMFY_DEFAULT_URL,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """List available checkpoints in ComfyUI."""
+    from tensors.comfy import ComfyClient  # noqa: PLC0415
+
+    try:
+        client = ComfyClient(url)
+        checkpoints = client.get_checkpoints()
+    except httpx.HTTPError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"checkpoints": checkpoints})
+        return
+
+    if not checkpoints:
+        console.print("[yellow]No checkpoints found.[/yellow]")
+        return
+
+    table = Table(title="ComfyUI Checkpoints", show_header=True, header_style="bold magenta")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Name", style="cyan")
+
+    for i, ckpt in enumerate(checkpoints, 1):
+        table.add_row(str(i), ckpt)
+
+    console.print(table)
+
+
+@comfy_app.command("loras")
+def comfy_loras(
+    url: Annotated[str, typer.Option("--url", "-u", help="ComfyUI server URL")] = COMFY_DEFAULT_URL,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """List available LoRAs in ComfyUI."""
+    from tensors.comfy import ComfyClient  # noqa: PLC0415
+
+    try:
+        client = ComfyClient(url)
+        loras = client.get_loras()
+    except httpx.HTTPError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"loras": loras})
+        return
+
+    if not loras:
+        console.print("[yellow]No LoRAs found.[/yellow]")
+        return
+
+    table = Table(title="ComfyUI LoRAs", show_header=True, header_style="bold magenta")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Name", style="cyan")
+
+    for i, lora in enumerate(loras, 1):
+        table.add_row(str(i), lora)
+
+    console.print(table)
+
+
+@comfy_app.command("generate")
+def comfy_generate(
+    prompt: Annotated[str, typer.Argument(help="Text prompt for generation")],
+    url: Annotated[str, typer.Option("--url", "-u", help="ComfyUI server URL")] = COMFY_DEFAULT_URL,
+    checkpoint: Annotated[str | None, typer.Option("-m", "--model", help="Checkpoint model name")] = None,
+    negative: Annotated[str, typer.Option("-n", "--negative", help="Negative prompt")] = "",
+    width: Annotated[int, typer.Option("-W", "--width", help="Image width")] = 512,
+    height: Annotated[int, typer.Option("-H", "--height", help="Image height")] = 512,
+    steps: Annotated[int, typer.Option("--steps", help="Sampling steps")] = 20,
+    cfg: Annotated[float, typer.Option("--cfg", help="CFG scale")] = 7.0,
+    seed: Annotated[int, typer.Option("-s", "--seed", help="RNG seed (-1 for random)")] = -1,
+    sampler: Annotated[str, typer.Option("--sampler", help="Sampler name")] = "euler_ancestral",
+    output: Annotated[Path | None, typer.Option("-o", "--output", help="Output file path")] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Generate an image using ComfyUI."""
+    from tensors.comfy import ComfyClient  # noqa: PLC0415
+
+    try:
+        client = ComfyClient(url)
+
+        console.print(f"[cyan]Generating with ComfyUI at {url}...[/cyan]")
+        result = client.generate(
+            prompt=prompt,
+            negative_prompt=negative,
+            checkpoint=checkpoint,
+            width=width,
+            height=height,
+            steps=steps,
+            cfg=cfg,
+            seed=seed,
+            sampler=sampler,
+        )
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data=result)
+        return
+
+    console.print(f"[green]Generated![/green] Seed: {result['seed']}, Checkpoint: {result['checkpoint']}")
+
+    if result["images"]:
+        img_info = result["images"][0]
+        console.print(f"[dim]Image: {img_info['filename']}[/dim]")
+
+        if output:
+            img_data = client.get_image(img_info["filename"], img_info["subfolder"], img_info["type"])
+            output.write_bytes(img_data)
+            console.print(f"[green]Saved to:[/green] {output}")
+
+
 def main() -> int:
     """Main entry point."""
     # Handle legacy invocation: tsr <file.safetensors> -> tsr info <file>
@@ -1216,6 +1388,7 @@ def main() -> int:
         "images",
         "models",
         "remote",
+        "comfy",
     )
     if len(sys.argv) > 1 and not sys.argv[1].startswith("-"):
         arg = sys.argv[1]
