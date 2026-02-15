@@ -15,7 +15,7 @@ from tensors.db import Database
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/download", tags=["download"])
+router = APIRouter(prefix="/api/download", tags=["Download"])
 
 # Track active downloads
 _active_downloads: dict[str, dict[str, Any]] = {}

@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from fastapi import FastAPI
+from scalar_fastapi import get_scalar_api_reference
 
 from tensors.server.civitai_routes import create_civitai_router
 from tensors.server.db_routes import create_db_router
@@ -15,6 +16,8 @@ from tensors.server.gallery_routes import create_gallery_router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from fastapi.responses import HTMLResponse
 
 __all__ = ["app", "create_app"]
 
@@ -29,11 +32,25 @@ def create_app() -> FastAPI:
         logger.info("Tensors server starting")
         yield
 
-    app = FastAPI(title="tensors", lifespan=lifespan)
+    app = FastAPI(
+        title="tensors",
+        description="API for CivitAI model management and image gallery",
+        version="0.1.16",
+        lifespan=lifespan,
+        docs_url=None,
+        redoc_url=None,
+    )
 
     @app.get("/status")
     async def status() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/docs", include_in_schema=False)
+    async def scalar_docs() -> HTMLResponse:
+        return get_scalar_api_reference(
+            openapi_url=app.openapi_url or "/openapi.json",
+            title="tensors API",
+        )
 
     app.include_router(create_civitai_router())
     app.include_router(create_db_router())

@@ -15,7 +15,7 @@ from tensors.db import Database
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/db", tags=["database"])
+router = APIRouter(prefix="/api/db", tags=["Database"])
 
 
 # =============================================================================

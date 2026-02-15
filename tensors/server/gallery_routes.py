@@ -13,7 +13,7 @@ from tensors.server.gallery import Gallery
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/images", tags=["gallery"])
+router = APIRouter(prefix="/api/images", tags=["Gallery"])
 
 # Shared gallery instance
 _gallery: Gallery | None = None

@@ -14,7 +14,7 @@ from tensors.db import Database
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/civitai", tags=["civitai"])
+router = APIRouter(prefix="/api/civitai", tags=["CivitAI"])
 
 
 def _get_headers(api_key: str | None) -> dict[str, str]:
