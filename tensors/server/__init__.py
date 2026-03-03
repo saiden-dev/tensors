@@ -7,6 +7,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
 from fastapi import Depends, FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from scalar_fastapi import get_scalar_api_reference
 
 from tensors.config import get_server_api_key
@@ -50,7 +51,14 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
-    # CORS disabled - ComfyUI proxy handles its own requests
+    # CORS for local development
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Public endpoints (no auth)
     @app.get("/status")
