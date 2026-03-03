@@ -223,6 +223,17 @@ def comfyui_generate(request: GenerateRequest) -> dict[str, Any]:
     This uses the built-in SDXL/Flux compatible workflow template.
     For custom workflows, use the /workflow endpoint instead.
     """
+    logger.info(
+        "Generate request: model=%s, size=%dx%d, steps=%d, prompt=%r",
+        request.model or "default",
+        request.width,
+        request.height,
+        request.steps,
+        request.prompt[:100] + "..." if len(request.prompt) > 100 else request.prompt,
+    )
+    if request.negative_prompt:
+        logger.debug("Negative prompt: %r", request.negative_prompt[:100])
+
     result = generate_image(
         prompt=request.prompt,
         negative_prompt=request.negative_prompt,
@@ -238,7 +249,13 @@ def comfyui_generate(request: GenerateRequest) -> dict[str, Any]:
     )
 
     if not result:
+        logger.error("Generation failed to queue")
         raise HTTPException(status_code=502, detail="Failed to queue generation")
+
+    if result.success:
+        logger.info("Generation complete: prompt_id=%s, images=%d", result.prompt_id, len(result.images))
+    else:
+        logger.warning("Generation failed: prompt_id=%s, errors=%s", result.prompt_id, result.node_errors)
 
     return {
         "success": result.success,
