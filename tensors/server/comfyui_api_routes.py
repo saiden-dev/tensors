@@ -260,8 +260,14 @@ def comfyui_generate(request: GenerateRequest) -> dict[str, Any]:
         if request.cfg == 7.0:  # Default value in schema
             cfg = family_defaults["cfg"]
 
-        logger.debug("Detected model family: %s (sampler=%s, scheduler=%s, steps=%d, cfg=%.1f)",
-                     detected_family, sampler, scheduler, steps, cfg)
+        logger.debug(
+            "Detected model family: %s (sampler=%s, scheduler=%s, steps=%d, cfg=%.1f)",
+            detected_family,
+            sampler,
+            scheduler,
+            steps,
+            cfg,
+        )
 
     lora_info = f", lora={request.lora_name}@{request.lora_strength}" if request.lora_name else ""
     logger.info(
