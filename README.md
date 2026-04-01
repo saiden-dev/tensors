@@ -8,7 +8,7 @@
   <a href="https://pypi.org/project/tensors"><img src="https://img.shields.io/pypi/v/tensors?color=blue" alt="PyPI"></a>
   <img src="https://img.shields.io/badge/coverage-50%25-yellow" alt="Coverage">
   <img src="https://img.shields.io/badge/python-3.12+-blue" alt="Python">
-  <a href="https://github.com/saiden-dev/tensors/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://github.com/saiden-dev/tensors/blob/master/LICENSE"><img src="https://img.shields.io/badge/license-BSL--1.1-blue" alt="License"></a>
 </p>
 
 <p align="center">
@@ -515,4 +515,4 @@ uv run mypy tensors/
 
 ## License
 
-MIT
+[BSL-1.1](LICENSE)
