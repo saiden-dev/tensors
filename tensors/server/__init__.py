@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -61,10 +62,12 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
 
-    # CORS for local development
+    # CORS — configurable via CORS_ORIGINS env var (comma-separated, default: *)
+    cors_raw = os.environ.get("CORS_ORIGINS", "*")
+    cors_origins = ["*"] if cors_raw.strip() == "*" else [o.strip() for o in cors_raw.split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+        allow_origins=cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
