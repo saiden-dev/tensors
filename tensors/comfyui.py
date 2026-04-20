@@ -709,6 +709,7 @@ DEFAULT_WORKFLOW_TEMPLATE: dict[str, Any] = {
     },
 }
 
+
 def _build_workflow(
     prompt: str,
     negative_prompt: str = "",

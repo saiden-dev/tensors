@@ -790,9 +790,7 @@ def generate(  # noqa: PLR0915
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Save path (default: current dir)")] = None,
     remote: Annotated[str | None, typer.Option("-r", "--remote", help="Remote server name or URL")] = None,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
-    json_input: Annotated[
-        str | None, typer.Option("--input", "-I", help="JSON params (keys match CLI options)")
-    ] = None,
+    json_input: Annotated[str | None, typer.Option("--input", "-I", help="JSON params (keys match CLI options)")] = None,
 ) -> None:
     """Generate an image using text-to-image.
 
@@ -838,11 +836,15 @@ def generate(  # noqa: PLR0915
 
         # Determine which CLI params the user explicitly set
         click_ctx = ctx._context if hasattr(ctx, "_context") else ctx
-        explicit = {
-            p.name
-            for p in click_ctx.command.params
-            if click_ctx.get_parameter_source(p.name) == click.core.ParameterSource.COMMANDLINE
-        } if hasattr(click_ctx, "get_parameter_source") else set()
+        explicit = (
+            {
+                p.name
+                for p in click_ctx.command.params
+                if click_ctx.get_parameter_source(p.name) == click.core.ParameterSource.COMMANDLINE
+            }
+            if hasattr(click_ctx, "get_parameter_source")
+            else set()
+        )
 
         # Apply JSON values for anything not explicitly set on CLI
         if "prompt" in mapped and ("prompt" not in explicit and prompt is None):
