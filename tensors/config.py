@@ -506,6 +506,42 @@ COMFYUI_DEFAULT_SCHEDULER = "normal"
 # Model Family Defaults (Quality Tags, Negative Prompts, etc.)
 # ============================================================================
 
+# Rating tags per model family — maps (family, rating) to the tag to inject
+# Families not listed here have no rating tag system (prompt-driven only)
+RATING_TAGS: dict[str, dict[str, str]] = {
+    "pony": {
+        "safe": "rating_safe",
+        "questionable": "rating_questionable",
+        "explicit": "rating_explicit",
+    },
+    "illustrious": {
+        "safe": "rating:safe",
+        "questionable": "rating:questionable",
+        "explicit": "rating:explicit",
+    },
+}
+# NoobAI uses same tags as Illustrious
+RATING_TAGS["noobai"] = RATING_TAGS["illustrious"]
+
+
+def get_rating_tag(family: str | None, rating: str) -> str | None:
+    """Get the rating tag for a model family and rating level.
+
+    Args:
+        family: Model family key (e.g. "pony", "illustrious") or None
+        rating: One of "safe", "questionable", "explicit"
+
+    Returns:
+        Rating tag string to inject into prompt, or None if family has no rating system
+    """
+    if not family:
+        return None
+    tags = RATING_TAGS.get(family)
+    if not tags:
+        return None
+    return tags.get(rating)
+
+
 MODEL_FAMILY_DEFAULTS: dict[str, dict[str, Any]] = {
     "pony": {
         "quality_prefix": "score_9, score_8_up, score_7_up",
