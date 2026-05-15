@@ -604,56 +604,29 @@ def download(
 
 
 def _add_downloaded_file_to_db(dest_path: Path, version_info: dict[str, Any]) -> None:
-    """Add a downloaded file to the database and link to CivitAI.
+    """Add a downloaded file to the database, link to CivitAI, and cache full model data.
 
     Args:
         dest_path: Path to the downloaded file
         version_info: CivitAI version info response
     """
-    try:
-        console.print("[dim]Adding to database...[/dim]")
+    console.print("[dim]Adding to database...[/dim]")
+    api_key = load_api_key()
+    with Database() as db:
+        db.init_schema()
+        result = db.register_downloaded_file(dest_path, version_info, api_key=api_key, console=console)
 
-        # Compute SHA256 hash
-        sha256 = compute_sha256(dest_path, console)
+    if result["error"]:
+        console.print(f"[yellow]Warning: Could not add to database: {result['error']}[/yellow]")
+        return
 
-        # Read safetensor metadata
-        metadata = read_safetensor_metadata(dest_path)
-
-        # Extract CivitAI IDs
+    console.print(f"[green]Added to database (id={result['file_id']})[/green]")
+    if result["linked"]:
         civitai_version_id = version_info.get("id")
         civitai_model_id = version_info.get("modelId") or version_info.get("model", {}).get("id")
-
-        with Database() as db:
-            db.init_schema()
-            with db.session() as session:
-                # Add local file record
-                local_file = db._upsert_local_file(
-                    session,
-                    file_path=str(dest_path.resolve()),
-                    sha256=sha256,
-                    header_size=metadata.get("header_size"),
-                    tensor_count=metadata.get("tensor_count"),
-                )
-
-                # Store safetensor metadata
-                db._store_safetensor_metadata(session, local_file.id, metadata.get("metadata", {}))
-
-                # Link to CivitAI if we have the IDs
-                if civitai_model_id and civitai_version_id:
-                    local_file.civitai_model_id = civitai_model_id
-                    local_file.civitai_version_id = civitai_version_id
-                    session.add(local_file)
-
-                session.commit()
-                file_id = local_file.id
-
-        # Report success
-        console.print(f"[green]Added to database (id={file_id})[/green]")
-        if civitai_model_id and civitai_version_id:
-            console.print(f"[green]Linked to CivitAI model={civitai_model_id} version={civitai_version_id}[/green]")
-
-    except Exception as e:
-        console.print(f"[yellow]Warning: Could not add to database: {e}[/yellow]")
+        console.print(f"[green]Linked to CivitAI model={civitai_model_id} version={civitai_version_id}[/green]")
+    if result["cached"]:
+        console.print("[green]Cached model metadata[/green]")
 
 
 def _display_download_info(

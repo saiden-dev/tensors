@@ -106,6 +106,7 @@ def _do_download(
     dest_path: Path,
     api_key: str | None,
     download_id: str,
+    version_info: dict[str, Any],
 ) -> None:
     """Background task to perform the download."""
     try:
@@ -133,8 +134,18 @@ def _do_download(
             _active_downloads[download_id]["progress"] = 100
             _active_downloads[download_id]["path"] = str(dest_path)
 
-            # Auto-scan and link the downloaded file
-            _auto_link_file(dest_path, api_key)
+            # Register the file in DB: hash, link to CivitAI IDs from version_info,
+            # and cache full model metadata so /api/db/* endpoints return resolved data.
+            with Database() as db:
+                db.init_schema()
+                db_result = db.register_downloaded_file(dest_path, version_info, api_key=api_key)
+
+            _active_downloads[download_id]["db_file_id"] = db_result["file_id"]
+            _active_downloads[download_id]["db_linked"] = db_result["linked"]
+            _active_downloads[download_id]["db_cached"] = db_result["cached"]
+            if db_result["error"]:
+                _active_downloads[download_id]["db_error"] = db_result["error"]
+                logger.error("DB register failed for %s: %s", dest_path, db_result["error"])
         else:
             _active_downloads[download_id]["status"] = "failed"
             _active_downloads[download_id]["error"] = "Download failed"
@@ -143,28 +154,6 @@ def _do_download(
         logger.exception("Download failed")
         _active_downloads[download_id]["status"] = "failed"
         _active_downloads[download_id]["error"] = str(e)
-
-
-def _auto_link_file(file_path: Path, api_key: str | None) -> None:
-    """Auto-scan and link the downloaded file to CivitAI."""
-    try:
-        with Database() as db:
-            db.init_schema()
-            # Scan the single file
-            results = db.scan_directory(file_path.parent)
-
-            # Find and link the new file
-            for result in results:
-                if result["file_path"] == str(file_path):
-                    sha256 = result["sha256"]
-                    civitai_data = fetch_civitai_by_hash(sha256, api_key)
-                    if civitai_data:
-                        version_id = civitai_data.get("id", 0)
-                        model_id = civitai_data.get("modelId", 0)
-                        if version_id and model_id:
-                            db.link_file_to_civitai(result["id"], model_id, version_id)
-    except Exception:
-        logger.exception("Auto-link failed")
 
 
 # =============================================================================
@@ -215,7 +204,7 @@ def start_download(req: DownloadRequest, background_tasks: BackgroundTasks) -> d
     }
 
     # Start background download
-    background_tasks.add_task(_do_download, version_id, dest_path, api_key, download_id)
+    background_tasks.add_task(_do_download, version_id, dest_path, api_key, download_id, version_info)
 
     return {
         "download_id": download_id,

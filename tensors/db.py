@@ -257,6 +257,71 @@ class Database:
                 session.add(f)
                 session.commit()
 
+    def register_downloaded_file(
+        self,
+        dest_path: Path,
+        version_info: dict[str, Any],
+        api_key: str | None = None,
+        console: Console | None = None,
+    ) -> dict[str, Any]:
+        """Register a freshly-downloaded file: hash, store metadata, link, and cache full model.
+
+        Idempotent and shared by the CLI download flow and the FastAPI background worker so
+        both paths produce identical DB state (local_file row + cached models/versions/tags
+        so ``db list`` can resolve names, triggers, and base_model).
+
+        Args:
+            dest_path: Path to the downloaded safetensor file.
+            version_info: CivitAI ``model-versions/{id}`` response (already fetched).
+            api_key: Optional CivitAI API key for the model fetch.
+            console: Optional Rich console for hash progress output.
+
+        Returns:
+            ``{"file_id": int, "sha256": str, "linked": bool, "cached": bool, "error": str | None}``
+        """
+        # Lazy import to avoid pulling httpx into modules that only need DB ops
+        from tensors.api import fetch_civitai_model  # noqa: PLC0415
+
+        result: dict[str, Any] = {"file_id": None, "sha256": None, "linked": False, "cached": False, "error": None}
+        try:
+            sha256 = compute_sha256(dest_path, console)
+            metadata = read_safetensor_metadata(dest_path)
+
+            civitai_version_id = version_info.get("id")
+            civitai_model_id = version_info.get("modelId") or version_info.get("model", {}).get("id")
+
+            with self.session() as session:
+                local_file = self._upsert_local_file(
+                    session,
+                    file_path=str(dest_path.resolve()),
+                    sha256=sha256,
+                    header_size=metadata.get("header_size"),
+                    tensor_count=metadata.get("tensor_count"),
+                )
+                self._store_safetensor_metadata(session, local_file.id, metadata.get("metadata", {}))
+
+                if civitai_model_id and civitai_version_id:
+                    local_file.civitai_model_id = civitai_model_id
+                    local_file.civitai_version_id = civitai_version_id
+                    session.add(local_file)
+                    result["linked"] = True
+
+                session.commit()
+                result["file_id"] = local_file.id
+                result["sha256"] = sha256
+
+            # Cache full model metadata so db list can resolve names/triggers/base_model.
+            # The version endpoint payload is too sparse for cache_model() (no creator, tags,
+            # or full modelVersions list), so we fetch the model endpoint here.
+            if civitai_model_id:
+                model_data = fetch_civitai_model(civitai_model_id, api_key, console)
+                if model_data:
+                    self.cache_model(model_data)
+                    result["cached"] = True
+        except Exception as e:  # surface any failure to caller without crashing the download
+            result["error"] = str(e)
+        return result
+
     # =========================================================================
     # CivitAI Cache Operations
     # =========================================================================
