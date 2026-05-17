@@ -1714,16 +1714,12 @@ def style_sweep(  # noqa: PLR0915
         # timing data.
         from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
 
-        console.print(
-            f"[dim]Parallel queue: {parallel_queue} concurrent submissions "
-            f"(output may interleave)[/dim]"
-        )
+        console.print(f"[dim]Parallel queue: {parallel_queue} concurrent submissions (output may interleave)[/dim]")
         # abort-on-error is incompatible with parallelism — we can't reliably
         # stop in-flight workers without losing their state. Warn and continue.
         if not continue_on_error:
             console.print(
-                "[yellow]Note: --abort-on-error is ignored when --parallel-queue > 1; "
-                "in-flight tasks always complete[/yellow]"
+                "[yellow]Note: --abort-on-error is ignored when --parallel-queue > 1; in-flight tasks always complete[/yellow]"
             )
 
         with ThreadPoolExecutor(max_workers=parallel_queue) as pool:
@@ -1755,10 +1751,7 @@ def style_sweep(  # noqa: PLR0915
                     )
                 else:
                     failed_slugs.append(res["slug"])
-                    console.print(
-                        f"[red]\\[{completed}/{len(pending_tasks)}] "
-                        f"{res['slug']} FAIL: {res['error']}[/red]"
-                    )
+                    console.print(f"[red]\\[{completed}/{len(pending_tasks)}] {res['slug']} FAIL: {res['error']}[/red]")
                 results.append(res)
 
         # Reorder results to match the original styles list order so the manifest

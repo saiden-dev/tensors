@@ -534,9 +534,7 @@ def test_parallel_queue_invalid_value(tmp_path: Path, calls: list[dict[str, Any]
     assert ">= 1" in result.output
 
 
-def test_parallel_queue_one_is_equivalent_to_sequential(
-    tmp_path: Path, calls: list[dict[str, Any]]
-) -> None:
+def test_parallel_queue_one_is_equivalent_to_sequential(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
     """-P 1 is identical to omitting the flag (the default sequential path)."""
     styles_file = _write_styles_file(
         tmp_path,
@@ -560,9 +558,7 @@ def test_parallel_queue_one_is_equivalent_to_sequential(
     assert calls[1]["prompt"].endswith("Bar")
 
 
-def test_parallel_queue_runs_all_styles(
-    tmp_path: Path, calls: list[dict[str, Any]]
-) -> None:
+def test_parallel_queue_runs_all_styles(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
     """-P 3 still produces N outputs and N _run_generation calls (no skipped work)."""
     styles_file = _write_styles_file(
         tmp_path,
@@ -591,17 +587,13 @@ def test_parallel_queue_runs_all_styles(
     assert "Parallel queue: 3 concurrent submissions" in result.output
 
 
-def test_parallel_queue_manifest_preserves_source_order(
-    tmp_path: Path, calls: list[dict[str, Any]]
-) -> None:
+def test_parallel_queue_manifest_preserves_source_order(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
     """Manifest results are sorted by original styles-list order, not completion order."""
     import time as time_mod
 
     styles_file = _write_styles_file(
         tmp_path,
-        [
-            {"slug": f"{n:02d}-s{n}", "suffix": f"S{n}"} for n in range(1, 7)
-        ],
+        [{"slug": f"{n:02d}-s{n}", "suffix": f"S{n}"} for n in range(1, 7)],
     )
     out_dir = tmp_path / "out"
     tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
@@ -632,14 +624,11 @@ def test_parallel_queue_manifest_preserves_source_order(
     manifest = json.loads((out_dir / "_sweep.json").read_text())
     slugs_in_manifest = [r["slug"] for r in manifest["results"]]
     assert slugs_in_manifest == [f"{n:02d}-s{n}" for n in range(1, 7)], (
-        "Manifest results must be in source-list order, "
-        f"not completion order. Got: {slugs_in_manifest}"
+        f"Manifest results must be in source-list order, not completion order. Got: {slugs_in_manifest}"
     )
 
 
-def test_parallel_queue_skip_existing_runs_synchronously(
-    tmp_path: Path, calls: list[dict[str, Any]]
-) -> None:
+def test_parallel_queue_skip_existing_runs_synchronously(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
     """Pre-existing outputs are skipped before the executor even starts."""
     styles_file = _write_styles_file(
         tmp_path,
@@ -667,9 +656,7 @@ def test_parallel_queue_skip_existing_runs_synchronously(
     assert "02-bar skip (exists)" in result.output
 
 
-def test_parallel_queue_continues_after_individual_failure(
-    tmp_path: Path, calls: list[dict[str, Any]]
-) -> None:
+def test_parallel_queue_continues_after_individual_failure(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
     """One task raising doesn't kill the others; manifest records the failure."""
     import typer as typer_mod
 
@@ -718,9 +705,7 @@ def test_parallel_queue_continues_after_individual_failure(
     assert by_slug["03-baz"]["success"] is True
 
 
-def test_parallel_queue_warns_about_abort_on_error(
-    tmp_path: Path, calls: list[dict[str, Any]]
-) -> None:
+def test_parallel_queue_warns_about_abort_on_error(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
     """--abort-on-error + parallel is contradictory; we warn and continue."""
     styles_file = _write_styles_file(tmp_path, [{"slug": "01-foo", "suffix": "Foo"}])
     tpl = _write_template(tmp_path, output_dir=tmp_path / "out", styles=str(styles_file))
@@ -729,8 +714,10 @@ def test_parallel_queue_warns_about_abort_on_error(
         app,
         [
             "style-sweep",
-            "--template", str(tpl),
-            "--parallel-queue", "2",
+            "--template",
+            str(tpl),
+            "--parallel-queue",
+            "2",
             "--abort-on-error",
         ],
     )
