@@ -1165,9 +1165,9 @@ class TestValidateModelAvailable:
 
     def test_unknown_model_in_checkpoints_bucket(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Unknown model + fuzzy-match candidates — exits 1 with did-you-mean."""
-        import typer  # noqa: PLC0415
+        import typer
 
-        from tensors import cli as cli_module  # noqa: PLC0415
+        from tensors import cli as cli_module
 
         monkeypatch.setattr(
             "tensors.comfyui.get_loaded_models",
@@ -1185,9 +1185,9 @@ class TestValidateModelAvailable:
 
     def test_unknown_model_in_diffusion_models_bucket(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """flux_unet family looks in diffusion_models/, not checkpoints/."""
-        import typer  # noqa: PLC0415
+        import typer
 
-        from tensors import cli as cli_module  # noqa: PLC0415
+        from tensors import cli as cli_module
 
         monkeypatch.setattr(
             "tensors.comfyui.get_loaded_models",
@@ -1204,7 +1204,7 @@ class TestValidateModelAvailable:
 
     def test_flux2_klein_uses_diffusion_models_bucket(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """flux2_klein family also routes to diffusion_models/."""
-        from tensors import cli as cli_module  # noqa: PLC0415
+        from tensors import cli as cli_module
 
         monkeypatch.setattr(
             "tensors.comfyui.get_loaded_models",
@@ -1221,7 +1221,7 @@ class TestValidateModelAvailable:
 
     def test_present_model_passes_silently(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Happy path — model present, no exception."""
-        from tensors import cli as cli_module  # noqa: PLC0415
+        from tensors import cli as cli_module
 
         monkeypatch.setattr(
             "tensors.comfyui.get_loaded_models",
@@ -1235,9 +1235,9 @@ class TestValidateModelAvailable:
 
     def test_missing_lora_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Model present but LoRA missing — exit 1."""
-        import typer  # noqa: PLC0415
+        import typer
 
-        from tensors import cli as cli_module  # noqa: PLC0415
+        from tensors import cli as cli_module
 
         monkeypatch.setattr(
             "tensors.comfyui.get_loaded_models",
@@ -1254,7 +1254,7 @@ class TestValidateModelAvailable:
 
     def test_network_failure_is_non_fatal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If get_loaded_models() raises, validation falls through silently."""
-        from tensors import cli as cli_module  # noqa: PLC0415
+        from tensors import cli as cli_module
 
         def _boom(console=None):
             raise ConnectionError("comfyui down")
@@ -1265,9 +1265,9 @@ class TestValidateModelAvailable:
 
     def test_symlink_hint_when_file_in_wrong_bucket(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """flux_unet checkpoint sitting in checkpoints/ → suggest symlinking."""
-        import typer  # noqa: PLC0415
+        import typer
 
-        from tensors import cli as cli_module  # noqa: PLC0415
+        from tensors import cli as cli_module
 
         monkeypatch.setattr(
             "tensors.comfyui.get_loaded_models",
@@ -1290,9 +1290,9 @@ class TestValidateModelAvailable:
         validator's flux_unet / flux2_klein bucket lookup would silently return
         an empty list.
         """
-        import inspect  # noqa: PLC0415
+        import inspect
 
-        import tensors.comfyui as comfyui_module  # noqa: PLC0415
+        import tensors.comfyui as comfyui_module
 
         src = inspect.getsource(comfyui_module.get_loaded_models)
         assert '"diffusion_models"' in src
