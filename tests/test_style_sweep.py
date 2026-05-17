@@ -514,3 +514,225 @@ def test_style_filter_with_list(tmp_path: Path, calls: list[dict[str, Any]]) -> 
     assert "01-foo" not in result.output
     assert "03-baz" not in result.output
     assert "1 entries" in result.output
+
+
+# -----------------------------------------------------------------------------
+# --parallel-queue tests
+# -----------------------------------------------------------------------------
+
+
+def test_parallel_queue_invalid_value(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """--parallel-queue 0 (or negative) is rejected."""
+    styles_file = _write_styles_file(tmp_path, [{"slug": "01-foo", "suffix": "Foo"}])
+    tpl = _write_template(tmp_path, output_dir=tmp_path / "out", styles=str(styles_file))
+
+    result = runner.invoke(
+        app,
+        ["style-sweep", "--template", str(tpl), "--parallel-queue", "0"],
+    )
+    assert result.exit_code == 1
+    assert ">= 1" in result.output
+
+
+def test_parallel_queue_one_is_equivalent_to_sequential(
+    tmp_path: Path, calls: list[dict[str, Any]]
+) -> None:
+    """-P 1 is identical to omitting the flag (the default sequential path)."""
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-foo", "suffix": "Foo"},
+            {"slug": "02-bar", "suffix": "Bar"},
+        ],
+    )
+    tpl = _write_template(tmp_path, output_dir=tmp_path / "out", styles=str(styles_file))
+
+    result = runner.invoke(
+        app,
+        ["style-sweep", "--template", str(tpl), "--parallel-queue", "1"],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2
+    # Sequential path emits "ok in X.Xs" without the "(submit #N)" suffix
+    assert "(submit #" not in result.output
+    # Order is deterministic: 01-foo then 02-bar
+    assert calls[0]["prompt"].endswith("Foo")
+    assert calls[1]["prompt"].endswith("Bar")
+
+
+def test_parallel_queue_runs_all_styles(
+    tmp_path: Path, calls: list[dict[str, Any]]
+) -> None:
+    """-P 3 still produces N outputs and N _run_generation calls (no skipped work)."""
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-foo", "suffix": "Foo"},
+            {"slug": "02-bar", "suffix": "Bar"},
+            {"slug": "03-baz", "suffix": "Baz"},
+            {"slug": "04-qux", "suffix": "Qux"},
+        ],
+    )
+    out_dir = tmp_path / "out"
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    result = runner.invoke(
+        app,
+        ["style-sweep", "--template", str(tpl), "--parallel-queue", "3"],
+    )
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 4
+    # Output files exist regardless of submission order
+    assert (out_dir / "01-foo.png").is_file()
+    assert (out_dir / "02-bar.png").is_file()
+    assert (out_dir / "03-baz.png").is_file()
+    assert (out_dir / "04-qux.png").is_file()
+    # Parallel mode announces itself
+    assert "Parallel queue: 3 concurrent submissions" in result.output
+
+
+def test_parallel_queue_manifest_preserves_source_order(
+    tmp_path: Path, calls: list[dict[str, Any]]
+) -> None:
+    """Manifest results are sorted by original styles-list order, not completion order."""
+    import time as time_mod
+
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": f"{n:02d}-s{n}", "suffix": f"S{n}"} for n in range(1, 7)
+        ],
+    )
+    out_dir = tmp_path / "out"
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    # Make completion order intentionally chaotic: later slugs finish faster.
+    def staggered_fake(**kwargs: Any) -> None:
+        prompt = kwargs.get("prompt", "")
+        # Heavier work for earlier slugs so they finish last.
+        # S1 sleeps 30ms, S6 sleeps 5ms.
+        sleep_ms = max(35 - int(prompt[-1]) * 5, 1)
+        time_mod.sleep(sleep_ms / 1000)
+        out: Path | None = kwargs.get("output")
+        if out is not None:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"png")
+        calls.append(kwargs)
+
+    import tensors.cli as cli_module  # noqa: PLC0415
+
+    cli_module._run_generation = staggered_fake  # type: ignore[assignment]
+
+    result = runner.invoke(
+        app,
+        ["style-sweep", "--template", str(tpl), "--parallel-queue", "4"],
+    )
+    assert result.exit_code == 0, result.output
+
+    manifest = json.loads((out_dir / "_sweep.json").read_text())
+    slugs_in_manifest = [r["slug"] for r in manifest["results"]]
+    assert slugs_in_manifest == [f"{n:02d}-s{n}" for n in range(1, 7)], (
+        "Manifest results must be in source-list order, "
+        f"not completion order. Got: {slugs_in_manifest}"
+    )
+
+
+def test_parallel_queue_skip_existing_runs_synchronously(
+    tmp_path: Path, calls: list[dict[str, Any]]
+) -> None:
+    """Pre-existing outputs are skipped before the executor even starts."""
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-foo", "suffix": "Foo"},
+            {"slug": "02-bar", "suffix": "Bar"},
+            {"slug": "03-baz", "suffix": "Baz"},
+        ],
+    )
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    # Pre-create 02-bar
+    (out_dir / "02-bar.png").write_bytes(b"existing")
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    result = runner.invoke(
+        app,
+        ["style-sweep", "--template", str(tpl), "--parallel-queue", "2"],
+    )
+    assert result.exit_code == 0, result.output
+    # Only 01-foo and 03-baz generated; 02-bar skipped
+    assert len(calls) == 2
+    generated_slugs = sorted(c["output"].name for c in calls)
+    assert generated_slugs == ["01-foo.png", "03-baz.png"]
+    assert "02-bar skip (exists)" in result.output
+
+
+def test_parallel_queue_continues_after_individual_failure(
+    tmp_path: Path, calls: list[dict[str, Any]]
+) -> None:
+    """One task raising doesn't kill the others; manifest records the failure."""
+    import typer as typer_mod
+
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-foo", "suffix": "Foo"},
+            {"slug": "02-bar", "suffix": "Bar"},
+            {"slug": "03-baz", "suffix": "Baz"},
+        ],
+    )
+    out_dir = tmp_path / "out"
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    def selective_fail(**kwargs: Any) -> None:
+        prompt = kwargs.get("prompt", "")
+        out: Path | None = kwargs.get("output")
+        if "Bar" in prompt:
+            raise typer_mod.Exit(1)
+        if out is not None:
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_bytes(b"png")
+        calls.append(kwargs)
+
+    import tensors.cli as cli_module  # noqa: PLC0415
+
+    cli_module._run_generation = selective_fail  # type: ignore[assignment]
+
+    result = runner.invoke(
+        app,
+        ["style-sweep", "--template", str(tpl), "--parallel-queue", "3"],
+    )
+    # Exit 1 because one slug failed (sweep exits non-zero on any failure even
+    # with --continue-on-error)
+    assert result.exit_code == 1, result.output
+    # Other two succeeded
+    assert (out_dir / "01-foo.png").is_file()
+    assert (out_dir / "03-baz.png").is_file()
+    assert not (out_dir / "02-bar.png").is_file()
+    # Manifest records all three with 02-bar marked failed
+    manifest = json.loads((out_dir / "_sweep.json").read_text())
+    by_slug = {r["slug"]: r for r in manifest["results"]}
+    assert by_slug["01-foo"]["success"] is True
+    assert by_slug["02-bar"]["success"] is False
+    assert "exited with code 1" in by_slug["02-bar"]["error"]
+    assert by_slug["03-baz"]["success"] is True
+
+
+def test_parallel_queue_warns_about_abort_on_error(
+    tmp_path: Path, calls: list[dict[str, Any]]
+) -> None:
+    """--abort-on-error + parallel is contradictory; we warn and continue."""
+    styles_file = _write_styles_file(tmp_path, [{"slug": "01-foo", "suffix": "Foo"}])
+    tpl = _write_template(tmp_path, output_dir=tmp_path / "out", styles=str(styles_file))
+
+    result = runner.invoke(
+        app,
+        [
+            "style-sweep",
+            "--template", str(tpl),
+            "--parallel-queue", "2",
+            "--abort-on-error",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "--abort-on-error is ignored when --parallel-queue > 1" in result.output
