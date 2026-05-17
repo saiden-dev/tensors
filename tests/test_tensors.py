@@ -358,24 +358,16 @@ class TestModelFamilyDetection:
         """fcFluxPony*.safetensors → flux_unet (intercepts flux + fluxpony)."""
         from tensors.config import detect_model_family
 
-        assert (
-            detect_model_family("fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors")
-            == "flux_unet"
-        )
+        assert detect_model_family("fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors") == "flux_unet"
 
     def test_detect_flux_unet_overrides_base_model(self) -> None:
         """Filename UNet-only pattern wins over a (likely wrong) CivitAI base_model tag."""
         from tensors.config import detect_model_family
 
         # cyberrealisticFlux: filename pattern wins over wrong "Pony" tag → flux_unet.
-        assert (
-            detect_model_family("cyberrealisticFlux_v25.safetensors", "Pony") == "flux_unet"
-        )
+        assert detect_model_family("cyberrealisticFlux_v25.safetensors", "Pony") == "flux_unet"
         # getphat: filename pattern wins over wrong "SDXL 1.0" tag → flux_unet.
-        assert (
-            detect_model_family("getphatFLUXReality_v11.safetensors", "SDXL 1.0")
-            == "flux_unet"
-        )
+        assert detect_model_family("getphatFLUXReality_v11.safetensors", "SDXL 1.0") == "flux_unet"
 
     def test_flux_unet_family_defaults_has_external_clip(self) -> None:
         """flux_unet preset advertises external_clip + clip filenames."""
@@ -750,9 +742,7 @@ class TestFluxUnetWorkflowBuilder:
         """flux_unet locks KSampler.cfg to 1.0 and exposes the FluxGuidance dial."""
         from tensors.comfyui import _build_workflow
 
-        wf = _build_workflow(
-            prompt="a cat", model="getphatFLUXReality_v11.safetensors", cfg=7.5
-        )
+        wf = _build_workflow(prompt="a cat", model="getphatFLUXReality_v11.safetensors", cfg=7.5)
         assert wf["160"]["inputs"]["cfg"] == 1.0
         # The caller's cfg=7.5 should re-route to FluxGuidance (same precedence as plain flux)
         assert wf["140"]["inputs"]["guidance"] == 7.5
@@ -1178,9 +1168,7 @@ class TestValidateModelAvailable:
             },
         )
         with pytest.raises(typer.Exit) as exc:
-            cli_module._validate_model_available(
-                "fluxRealVision_v99.safetensors", family="flux", lora=None
-            )
+            cli_module._validate_model_available("fluxRealVision_v99.safetensors", family="flux", lora=None)
         assert exc.value.exit_code == 1
 
     def test_unknown_model_in_diffusion_models_bucket(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1198,9 +1186,7 @@ class TestValidateModelAvailable:
             },
         )
         with pytest.raises(typer.Exit):
-            cli_module._validate_model_available(
-                "getphat_v99.safetensors", family="flux_unet", lora=None
-            )
+            cli_module._validate_model_available("getphat_v99.safetensors", family="flux_unet", lora=None)
 
     def test_flux2_klein_uses_diffusion_models_bucket(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """flux2_klein family also routes to diffusion_models/."""
@@ -1215,9 +1201,7 @@ class TestValidateModelAvailable:
             },
         )
         # Should NOT raise — file is present in diffusion_models/.
-        cli_module._validate_model_available(
-            "lust_v10.safetensors", family="flux2_klein", lora=None
-        )
+        cli_module._validate_model_available("lust_v10.safetensors", family="flux2_klein", lora=None)
 
     def test_present_model_passes_silently(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Happy path — model present, no exception."""
@@ -1248,9 +1232,7 @@ class TestValidateModelAvailable:
             },
         )
         with pytest.raises(typer.Exit):
-            cli_module._validate_model_available(
-                "model.safetensors", family="flux", lora="ghost_lora.safetensors"
-            )
+            cli_module._validate_model_available("model.safetensors", family="flux", lora="ghost_lora.safetensors")
 
     def test_network_failure_is_non_fatal(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """If get_loaded_models() raises, validation falls through silently."""
@@ -1278,9 +1260,7 @@ class TestValidateModelAvailable:
             },
         )
         with pytest.raises(typer.Exit):
-            cli_module._validate_model_available(
-                "new_unet_model.safetensors", family="flux_unet", lora=None
-            )
+            cli_module._validate_model_available("new_unet_model.safetensors", family="flux_unet", lora=None)
 
     def test_get_loaded_models_includes_diffusion_models_bucket(self) -> None:
         """The Comfy model-listing helper exposes the UNETLoader bucket.

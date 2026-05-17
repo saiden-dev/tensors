@@ -1456,9 +1456,7 @@ def style_sweep(  # noqa: PLR0915
     # Template is required for generation, but optional when --list is paired
     # with an explicit --styles source.
     if template is None and not (list_styles and styles is not None):
-        console.print(
-            "[red]--template is required (or use --list with --styles to inspect a styles file)[/red]"
-        )
+        console.print("[red]--template is required (or use --list with --styles to inspect a styles file)[/red]")
         raise typer.Exit(1)
 
     # ---- Load template (if provided) ----

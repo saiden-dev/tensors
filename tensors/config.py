@@ -739,12 +739,12 @@ MODEL_FAMILY_DEFAULTS: dict[str, dict[str, Any]] = {
 # Add new patterns here as we encounter them — order doesn't matter, first
 # match wins.
 FLUX_UNET_ONLY_PATTERNS: tuple[str, ...] = (
-    "lust_",             # lust_v10.safetensors (Flux.2 Klein 9B-base)
+    "lust_",  # lust_v10.safetensors (Flux.2 Klein 9B-base)
     # Note: bare "lust" would falsely match "illustrious" — keep the underscore.
     "cyberrealisticflux",  # cyberrealisticFlux_v25.safetensors
-    "getphatflux",       # getphatFLUXReality_v11Softcore.safetensors
-    "moodydesire",       # moodyDesireMix_v20PRO.safetensors
-    "fcfluxpony",        # fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors
+    "getphatflux",  # getphatFLUXReality_v11Softcore.safetensors
+    "moodydesire",  # moodyDesireMix_v20PRO.safetensors
+    "fcfluxpony",  # fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors
 )
 
 
@@ -759,8 +759,8 @@ def _is_flux_unet_only(name_lower: str) -> bool:
 # filename patterns are a fallback for checkpoints with missing/wrong DB
 # metadata. Filename match wins over base_model.
 FLUX2_KLEIN_PATTERNS: tuple[str, ...] = (
-    "lust_",             # lust_v10.safetensors
-    "moodydesire",       # moodyDesireMix_v20PRO.safetensors
+    "lust_",  # lust_v10.safetensors
+    "moodydesire",  # moodyDesireMix_v20PRO.safetensors
 )
 
 
