@@ -692,6 +692,29 @@ MODEL_FAMILY_DEFAULTS: dict[str, dict[str, Any]] = {
         "clip_l": "clip_l.safetensors",
         "clip_t5": "t5xxl_fp16.safetensors",
     },
+    # Flux.2 Klein 9B — newer Black Forest Labs release. Different architecture
+    # from Flux.1: single Qwen3-8B text encoder (12288-dim conditioning, 3 stacked
+    # hidden layers), Flux2 latent format, custom Flux2Scheduler, dedicated VAE
+    # (flux2-vae.safetensors). Workflow uses CLIPLoader (type=flux2) instead of
+    # DualCLIPLoader, and the custom-sampling pipeline (SamplerCustomAdvanced +
+    # BasicGuider + Flux2Scheduler) instead of plain KSampler.
+    "flux2_klein": {
+        "quality_prefix": "",
+        "negative_prompt": "",
+        "width": 1024,
+        "height": 1024,
+        "portrait": (832, 1216),
+        "landscape": (1216, 832),
+        "cfg": 1.0,
+        "guidance": 3.5,
+        "sampler": "euler",
+        "scheduler": "simple",  # unused — Flux2Scheduler provides sigmas
+        "steps": 20,
+        "vae": "flux2-vae.safetensors",
+        "external_clip": True,
+        "clip_encoder": "qwen_3_8b_fp8mixed.safetensors",
+        "clip_type": "flux2",
+    },
     "zimage": {
         "quality_prefix": "",
         "negative_prompt": "",
@@ -730,6 +753,28 @@ def _is_flux_unet_only(name_lower: str) -> bool:
     return any(p in name_lower for p in FLUX_UNET_ONLY_PATTERNS)
 
 
+# Flux.2 Klein 9B filename substrings (case-insensitive). These checkpoints are
+# UNet-only AND require the Flux.2 architecture (Qwen3-8B encoder, Flux2
+# scheduler). Detection is primarily via base_model field ("Flux.2 Klein"); the
+# filename patterns are a fallback for checkpoints with missing/wrong DB
+# metadata. Filename match wins over base_model.
+FLUX2_KLEIN_PATTERNS: tuple[str, ...] = (
+    "lust_",             # lust_v10.safetensors
+    "moodydesire",       # moodyDesireMix_v20PRO.safetensors
+)
+
+
+def _is_flux2_klein(name_lower: str, base_lower: str) -> bool:
+    """True if the model is a Flux.2 Klein 9B checkpoint.
+
+    Detects via base_model field ("flux.2 klein", "flux2 klein") first,
+    then filename pattern fallback.
+    """
+    if "flux.2 klein" in base_lower or "flux2 klein" in base_lower:
+        return True
+    return any(p in name_lower for p in FLUX2_KLEIN_PATTERNS)
+
+
 def detect_model_family(model_name: str, base_model: str | None = None) -> str | None:  # noqa: PLR0911
     """Detect model family from filename or CivitAI base_model field.
 
@@ -739,10 +784,18 @@ def detect_model_family(model_name: str, base_model: str | None = None) -> str |
 
     Returns:
         Model family key (pony, illustrious, sdxl, sdxl_lightning, sdxl_turbo,
-        sd15, sd15_lcm, flux, flux_schnell, flux_unet, zimage) or None if unknown
+        sd15, sd15_lcm, flux, flux_schnell, flux_unet, flux2_klein, zimage)
+        or None if unknown
     """
     name_lower = model_name.lower()
     base_lower = (base_model or "").lower()
+
+    # Flux.2 Klein 9B override: must run BEFORE flux_unet (Klein patterns like
+    # "lust_" and "moodydesire" also appear in FLUX_UNET_ONLY_PATTERNS) AND
+    # before the generic flux check. Detection prefers base_model field but
+    # falls back to filename pattern for checkpoints with missing metadata.
+    if _is_flux2_klein(name_lower, base_lower):
+        return "flux2_klein"
 
     # UNet-only Flux override: must run BEFORE the generic flux check below,
     # since some patterns ("cyberrealisticflux", "getphatflux", "fcfluxpony")

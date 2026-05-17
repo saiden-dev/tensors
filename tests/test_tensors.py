@@ -321,11 +321,16 @@ class TestModelFamilyDetection:
         assert detect_model_family("model.safetensors", "Flux.1 S schnell") == "flux_schnell"
 
     def test_detect_flux_unet_lust(self) -> None:
-        """lust_*.safetensors → flux_unet (no 'flux' in name, custom pattern)."""
+        """lust_*.safetensors → flux2_klein (Klein detection wins via filename pattern).
+
+        Originally classified as flux_unet, but lust_v10 is actually Flux.2 Klein 9B
+        (per CivitAI base_model). Klein detection runs before flux_unet, so the
+        lust_ pattern in FLUX2_KLEIN_PATTERNS takes precedence.
+        """
         from tensors.config import detect_model_family
 
-        assert detect_model_family("lust_v10.safetensors") == "flux_unet"
-        assert detect_model_family("LUST_v10.safetensors") == "flux_unet"
+        assert detect_model_family("lust_v10.safetensors") == "flux2_klein"
+        assert detect_model_family("LUST_v10.safetensors") == "flux2_klein"
 
     def test_detect_flux_unet_cyberrealistic(self) -> None:
         """cyberrealisticFlux_*.safetensors → flux_unet (intercepts generic 'flux' match)."""
@@ -340,10 +345,14 @@ class TestModelFamilyDetection:
         assert detect_model_family("getphatFLUXReality_v11Softcore.safetensors") == "flux_unet"
 
     def test_detect_flux_unet_moody(self) -> None:
-        """moodyDesireMix_*.safetensors → flux_unet (no 'flux' in name)."""
+        """moodyDesireMix_*.safetensors → flux2_klein (Klein, not Flux.1 D).
+
+        Originally classified as flux_unet, but moodyDesireMix is Flux.2 Klein
+        9B per CivitAI. Klein detection wins via the moodydesire filename pattern.
+        """
         from tensors.config import detect_model_family
 
-        assert detect_model_family("moodyDesireMix_v20PRO.safetensors") == "flux_unet"
+        assert detect_model_family("moodyDesireMix_v20PRO.safetensors") == "flux2_klein"
 
     def test_detect_flux_unet_fcfluxpony(self) -> None:
         """fcFluxPony*.safetensors → flux_unet (intercepts flux + fluxpony)."""
@@ -358,10 +367,14 @@ class TestModelFamilyDetection:
         """Filename UNet-only pattern wins over a (likely wrong) CivitAI base_model tag."""
         from tensors.config import detect_model_family
 
-        # Even if CivitAI claims "SDXL 1.0", the filename pattern wins.
-        assert detect_model_family("lust_v10.safetensors", "SDXL 1.0") == "flux_unet"
+        # cyberrealisticFlux: filename pattern wins over wrong "Pony" tag → flux_unet.
         assert (
             detect_model_family("cyberrealisticFlux_v25.safetensors", "Pony") == "flux_unet"
+        )
+        # getphat: filename pattern wins over wrong "SDXL 1.0" tag → flux_unet.
+        assert (
+            detect_model_family("getphatFLUXReality_v11.safetensors", "SDXL 1.0")
+            == "flux_unet"
         )
 
     def test_flux_unet_family_defaults_has_external_clip(self) -> None:
@@ -381,11 +394,105 @@ class TestModelFamilyDetection:
         """flux_unet model resolves to the flux_unet preset with external_clip set."""
         from tensors.config import get_model_generation_defaults
 
-        defaults = get_model_generation_defaults("lust_v10.safetensors")
+        # getphat is genuinely Flux.1 D UNet-only (not Klein).
+        defaults = get_model_generation_defaults("getphatFLUXReality_v11.safetensors")
         assert defaults["family"] == "flux_unet"
         assert defaults["external_clip"] is True
         assert defaults["sampler"] == "euler"
         assert defaults["scheduler"] == "simple"
+
+    # ---- Flux.2 Klein 9B detection + workflow ----
+
+    def test_detect_flux2_klein_from_base_model(self) -> None:
+        """base_model='Flux.2 Klein 9B-base' → flux2_klein."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("anything.safetensors", "Flux.2 Klein 9B-base") == "flux2_klein"
+        assert detect_model_family("anything.safetensors", "Flux.2 Klein 9B") == "flux2_klein"
+        # Compact variant ("flux2 klein" without the dot) — also accepted.
+        assert detect_model_family("anything.safetensors", "flux2 Klein") == "flux2_klein"
+
+    def test_detect_flux2_klein_from_filename(self) -> None:
+        """Filename fallback: lust_ and moodydesire → flux2_klein even without DB metadata."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("lust_v10.safetensors") == "flux2_klein"
+        assert detect_model_family("moodyDesireMix_v20PRO.safetensors") == "flux2_klein"
+
+    def test_detect_flux2_klein_overrides_flux_unet(self) -> None:
+        """Klein detection runs BEFORE flux_unet, so Klein patterns win."""
+        from tensors.config import detect_model_family
+
+        # lust_ matches both FLUX2_KLEIN_PATTERNS and FLUX_UNET_ONLY_PATTERNS.
+        # Klein check runs first → flux2_klein.
+        assert detect_model_family("lust_v10.safetensors") == "flux2_klein"
+        # Even with wrong base_model, Klein filename wins.
+        assert detect_model_family("lust_v10.safetensors", "SDXL 1.0") == "flux2_klein"
+
+    def test_flux2_klein_family_defaults(self) -> None:
+        """flux2_klein preset has external_clip + Qwen3 encoder + Flux.2 VAE."""
+        from tensors.config import MODEL_FAMILY_DEFAULTS
+
+        defaults = MODEL_FAMILY_DEFAULTS["flux2_klein"]
+        assert defaults["external_clip"] is True
+        assert defaults["clip_encoder"] == "qwen_3_8b_fp8mixed.safetensors"
+        assert defaults["clip_type"] == "flux2"
+        assert defaults["vae"] == "flux2-vae.safetensors"
+        assert defaults["cfg"] == 1.0
+        assert defaults["guidance"] == 3.5
+
+    def test_build_workflow_flux2_klein_uses_cliploader(self) -> None:
+        """Flux.2 Klein workflow uses CLIPLoader(type=flux2) + EmptyFlux2LatentImage +
+        custom-sampling pipeline (no plain KSampler, no DualCLIPLoader)."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(prompt="test", model="lust_v10.safetensors", seed=42)
+
+        class_types = {node["class_type"] for node in wf.values()}
+        # Required Flux.2-specific nodes
+        assert "CLIPLoader" in class_types
+        assert "EmptyFlux2LatentImage" in class_types
+        assert "Flux2Scheduler" in class_types
+        assert "BasicGuider" in class_types
+        assert "SamplerCustomAdvanced" in class_types
+        assert "RandomNoise" in class_types
+        # Forbidden — these belong to Flux.1 / SDXL paths
+        assert "DualCLIPLoader" not in class_types
+        assert "KSampler" not in class_types
+        assert "EmptySD3LatentImage" not in class_types
+        assert "CheckpointLoaderSimple" not in class_types
+        assert "ModelSamplingFlux" not in class_types
+        # Verify CLIPLoader is configured correctly
+        clip_nodes = [n for n in wf.values() if n["class_type"] == "CLIPLoader"]
+        assert len(clip_nodes) == 1
+        assert clip_nodes[0]["inputs"]["type"] == "flux2"
+        assert clip_nodes[0]["inputs"]["clip_name"] == "qwen_3_8b_fp8mixed.safetensors"
+        # VAE is the Flux.2 one, not Flux.1's ae.safetensors
+        vae_nodes = [n for n in wf.values() if n["class_type"] == "VAELoader"]
+        assert vae_nodes[0]["inputs"]["vae_name"] == "flux2-vae.safetensors"
+
+    def test_build_workflow_flux2_klein_with_lora(self) -> None:
+        """LoRA injection inserts LoraLoader and reroutes BasicGuider + text encoders."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(
+            prompt="test",
+            model="lust_v10.safetensors",
+            seed=42,
+            lora_name="some_flux_lora.safetensors",
+            lora_strength=0.8,
+        )
+
+        # LoRA node added at "110"
+        assert "110" in wf
+        assert wf["110"]["class_type"] == "LoraLoader"
+        assert wf["110"]["inputs"]["lora_name"] == "some_flux_lora.safetensors"
+        assert wf["110"]["inputs"]["strength_model"] == 0.8
+        # BasicGuider (model consumer) now wired to LoRA output
+        assert wf["154"]["inputs"]["model"] == ["110", 0]
+        # Both text encoders re-routed to LoRA clip output
+        assert wf["130"]["inputs"]["clip"] == ["110", 1]
+        assert wf["131"]["inputs"]["clip"] == ["110", 1]
 
     def test_detect_sdxl_variants(self) -> None:
         """Test detecting SDXL family variants."""
@@ -607,7 +714,9 @@ class TestFluxUnetWorkflowBuilder:
         """flux_unet checkpoints emit UNETLoader + DualCLIPLoader + VAELoader and NO CheckpointLoaderSimple."""
         from tensors.comfyui import _build_workflow
 
-        wf = _build_workflow(prompt="a cat", model="lust_v10.safetensors")
+        # getphat is genuinely Flux.1 D UNet-only. lust_v10 used to live here
+        # but is actually Flux.2 Klein — see TestFamilyDetection.
+        wf = _build_workflow(prompt="a cat", model="getphatFLUXReality_v11.safetensors")
 
         # Three split loaders at the canonical IDs
         assert wf["100"]["class_type"] == "UNETLoader"
@@ -619,7 +728,7 @@ class TestFluxUnetWorkflowBuilder:
             assert node["class_type"] != "CheckpointLoaderSimple"
 
         # UNet filename plumbed through
-        assert wf["100"]["inputs"]["unet_name"] == "lust_v10.safetensors"
+        assert wf["100"]["inputs"]["unet_name"] == "getphatFLUXReality_v11.safetensors"
 
         # DualCLIPLoader configured for flux with both encoders
         clip_inputs = wf["101"]["inputs"]
@@ -642,7 +751,7 @@ class TestFluxUnetWorkflowBuilder:
         from tensors.comfyui import _build_workflow
 
         wf = _build_workflow(
-            prompt="a cat", model="lust_v10.safetensors", cfg=7.5
+            prompt="a cat", model="getphatFLUXReality_v11.safetensors", cfg=7.5
         )
         assert wf["160"]["inputs"]["cfg"] == 1.0
         # The caller's cfg=7.5 should re-route to FluxGuidance (same precedence as plain flux)
@@ -654,7 +763,7 @@ class TestFluxUnetWorkflowBuilder:
 
         wf = _build_workflow(
             prompt="a cat",
-            model="lust_v10.safetensors",
+            model="getphatFLUXReality_v11.safetensors",
             lora_name="my_style.safetensors",
             lora_strength=0.6,
         )
@@ -675,7 +784,7 @@ class TestFluxUnetWorkflowBuilder:
 
         wf = _build_workflow(
             prompt="a cat",
-            model="lust_v10.safetensors",
+            model="getphatFLUXReality_v11.safetensors",
             vae="other_vae.safetensors",
         )
         assert wf["102"]["inputs"]["vae_name"] == "other_vae.safetensors"
@@ -692,8 +801,11 @@ class TestFluxUnetWorkflowBuilder:
         """
         from tensors.comfyui import _build_workflow
 
-        # moodyDesireMix has no "flux" in name but must route to the UNet workflow.
-        wf = _build_workflow(prompt="a cat", model="moodyDesireMix_v20PRO.safetensors")
+        # fcFluxPony is genuinely Flux.1 D (UNet-only) — moodyDesire was Klein.
+        wf = _build_workflow(
+            prompt="a cat",
+            model="fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors",
+        )
         assert wf["100"]["class_type"] == "UNETLoader"
         assert wf["101"]["class_type"] == "DualCLIPLoader"
 

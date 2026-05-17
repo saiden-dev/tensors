@@ -830,6 +830,83 @@ FLUX_UNET_WORKFLOW_TEMPLATE: dict[str, Any] = {
 }
 
 
+# Flux.2 Klein 9B workflow template — different architecture from Flux.1:
+# - Single Qwen3-8B text encoder via CLIPLoader(type=flux2), produces 12288-dim
+#   conditioning (3 stacked hidden layers)
+# - EmptyFlux2LatentImage instead of EmptySD3LatentImage (different latent shape)
+# - Custom-sampling pipeline (Flux2Scheduler + BasicGuider + RandomNoise +
+#   KSamplerSelect + SamplerCustomAdvanced) instead of plain KSampler
+# - Dedicated VAE (flux2-vae.safetensors), not the Flux.1 ae.safetensors
+# Verified end-to-end against ComfyUI on madcat with lust_v10.safetensors.
+FLUX2_KLEIN_WORKFLOW_TEMPLATE: dict[str, Any] = {
+    "100": {
+        "class_type": "UNETLoader",
+        "inputs": {"unet_name": "", "weight_dtype": "default"},
+    },
+    "101": {
+        "class_type": "CLIPLoader",
+        "inputs": {
+            "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+            "type": "flux2",
+        },
+    },
+    "102": {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": "flux2-vae.safetensors"},
+    },
+    "130": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["101", 0]},
+    },
+    "131": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["101", 0]},
+    },
+    "140": {
+        "class_type": "FluxGuidance",
+        "inputs": {"conditioning": ["130", 0], "guidance": 3.5},
+    },
+    "150": {
+        "class_type": "EmptyFlux2LatentImage",
+        "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+    },
+    "151": {
+        "class_type": "RandomNoise",
+        "inputs": {"noise_seed": 0},
+    },
+    "152": {
+        "class_type": "KSamplerSelect",
+        "inputs": {"sampler_name": "euler"},
+    },
+    "153": {
+        "class_type": "Flux2Scheduler",
+        "inputs": {"steps": 20, "width": 1024, "height": 1024},
+    },
+    "154": {
+        "class_type": "BasicGuider",
+        "inputs": {"model": ["100", 0], "conditioning": ["140", 0]},
+    },
+    "160": {
+        "class_type": "SamplerCustomAdvanced",
+        "inputs": {
+            "noise": ["151", 0],
+            "guider": ["154", 0],
+            "sampler": ["152", 0],
+            "sigmas": ["153", 0],
+            "latent_image": ["150", 0],
+        },
+    },
+    "170": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["160", 0], "vae": ["102", 0]},
+    },
+    "180": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "flux2", "images": ["170", 0]},
+    },
+}
+
+
 # Default SDXL/Illustrious/Pony compatible workflow template
 # Uses separate VAE loader for better quality with modern models
 DEFAULT_WORKFLOW_TEMPLATE: dict[str, Any] = {
@@ -1056,6 +1133,93 @@ def _build_flux_unet_workflow(
     return workflow
 
 
+def _build_flux2_klein_workflow(
+    prompt: str,
+    model: str | None,
+    seed: int,
+    steps: int,
+    sampler: str,
+    width: int,
+    height: int,
+    batch_size: int,
+    lora_name: str | None,
+    lora_strength: float,
+    vae: str | None,
+    guidance: float,
+    clip_encoder: str,
+    clip_type: str,
+) -> dict[str, Any]:
+    """Build a Flux.2 Klein 9B workflow (single Qwen3 encoder, custom sampling).
+
+    The graph differs from Flux.1 in three ways:
+    1. Single-encoder ``CLIPLoader`` (type=flux2) instead of ``DualCLIPLoader``.
+    2. ``EmptyFlux2LatentImage`` for the Flux2-specific latent shape.
+    3. Custom-sampling pipeline: ``Flux2Scheduler`` produces SIGMAS, fed into
+       ``SamplerCustomAdvanced`` along with ``BasicGuider``/``RandomNoise``/
+       ``KSamplerSelect``. There is no standalone ``KSampler`` node, so the
+       caller-provided ``scheduler`` is ignored (Flux2Scheduler is the only
+       supported sigma source).
+    """
+    workflow = copy.deepcopy(FLUX2_KLEIN_WORKFLOW_TEMPLATE)
+
+    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
+
+    # UNet checkpoint
+    if model:
+        workflow["100"]["inputs"]["unet_name"] = model
+
+    # Text encoder (Qwen3-8B variant — fp8 default, callers can override via
+    # family preset's clip_encoder field if a different quantization is desired).
+    workflow["101"]["inputs"]["clip_name"] = clip_encoder
+    workflow["101"]["inputs"]["type"] = clip_type
+
+    # External VAE — fall back to flux2-vae.safetensors from the template if unset
+    if vae:
+        workflow["102"]["inputs"]["vae_name"] = vae
+
+    # Positive prompt (negative is unused for Flux — guidance is distilled)
+    workflow["130"]["inputs"]["text"] = prompt
+
+    # FluxGuidance carries the real prompt-adherence dial
+    workflow["140"]["inputs"]["guidance"] = guidance
+
+    # Latent dimensions
+    workflow["150"]["inputs"]["width"] = width
+    workflow["150"]["inputs"]["height"] = height
+    workflow["150"]["inputs"]["batch_size"] = batch_size
+
+    # Noise seed (separate node in custom-sampling pipeline)
+    workflow["151"]["inputs"]["noise_seed"] = actual_seed
+
+    # Sampler selection
+    workflow["152"]["inputs"]["sampler_name"] = sampler
+
+    # Flux2Scheduler — must receive matching width/height for correct sigma schedule
+    workflow["153"]["inputs"]["steps"] = steps
+    workflow["153"]["inputs"]["width"] = width
+    workflow["153"]["inputs"]["height"] = height
+
+    # Optional LoRA: injected between UNet/CLIP loaders and BasicGuider/
+    # CLIPTextEncode consumers. Mirrors the flux_unet wiring pattern.
+    if lora_name:
+        workflow["110"] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "model": ["100", 0],
+                "clip": ["101", 0],
+                "lora_name": lora_name,
+                "strength_model": lora_strength,
+                "strength_clip": lora_strength,
+            },
+        }
+        # Re-route consumers from raw loaders (100/101) to LoRA outputs (110).
+        workflow["154"]["inputs"]["model"] = ["110", 0]
+        workflow["130"]["inputs"]["clip"] = ["110", 1]
+        workflow["131"]["inputs"]["clip"] = ["110", 1]
+
+    return workflow
+
+
 def _build_workflow(
     prompt: str,
     negative_prompt: str = "",
@@ -1141,6 +1305,27 @@ def _build_workflow(
             lora_strength=lora_strength,
             vae=resolved_vae,
             guidance=_resolve_flux_guidance(guidance, cfg, defaults),
+        )
+
+    # Flux.2 Klein 9B: different architecture (single Qwen3 encoder, custom
+    # sampling pipeline, Flux2 latent format). Must dispatch BEFORE flux_unet
+    # since Klein checkpoints also set external_clip=True.
+    if family == "flux2_klein":
+        return _build_flux2_klein_workflow(
+            prompt=prompt,
+            model=model,
+            seed=seed,
+            steps=resolved_steps,
+            sampler=resolved_sampler,
+            width=resolved_width,
+            height=resolved_height,
+            batch_size=batch_size,
+            lora_name=lora_name,
+            lora_strength=lora_strength,
+            vae=resolved_vae,
+            guidance=_resolve_flux_guidance(guidance, cfg, defaults),
+            clip_encoder=defaults.get("clip_encoder", "qwen_3_8b_fp8mixed.safetensors"),
+            clip_type=defaults.get("clip_type", "flux2"),
         )
 
     # UNet-only Flux checkpoints (no baked-in CLIP/T5/VAE): use the split-loader
