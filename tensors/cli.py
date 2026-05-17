@@ -772,6 +772,18 @@ def generate(  # noqa: PLR0915
     ] = None,
     no_quality: Annotated[bool, typer.Option("--no-quality", help="Disable auto quality tags")] = False,
     no_negative: Annotated[bool, typer.Option("--no-negative", help="Disable auto negative prompt")] = False,
+    family: Annotated[
+        str | None,
+        typer.Option(
+            "--family",
+            "-F",
+            help=(
+                "Override detected model family "
+                "(pony, illustrious, sdxl, sdxl_lightning, sdxl_turbo, "
+                "sd15, sd15_lcm, flux, flux_schnell, zimage)"
+            ),
+        ),
+    ] = None,
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Save path (default: current dir)")] = None,
     remote: Annotated[str | None, typer.Option("-r", "--remote", help="Remote server name or URL")] = None,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
@@ -893,11 +905,17 @@ def generate(  # noqa: PLR0915
         except Exception:
             pass
 
-        model_family = detect_model_family(model, base_model_str)
+        detected_family = detect_model_family(model, base_model_str)
+        model_family = family or detected_family
         if model_family:
             family_defaults = MODEL_FAMILY_DEFAULTS.get(model_family, {})
             if not json_output:
-                console.print(f"[dim]Detected model family: {model_family}[/dim]")
+                if family and detected_family and family != detected_family:
+                    console.print(f"[dim]Model family: {model_family} (override; detected: {detected_family})[/dim]")
+                elif family:
+                    console.print(f"[dim]Model family: {model_family} (override)[/dim]")
+                else:
+                    console.print(f"[dim]Detected model family: {model_family}[/dim]")
 
     # Build enhanced prompt with quality prefix and LoRA trigger words
     prompt_parts: list[str] = []

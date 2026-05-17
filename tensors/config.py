@@ -645,7 +645,11 @@ MODEL_FAMILY_DEFAULTS: dict[str, dict[str, Any]] = {
         "height": 1024,
         "portrait": (832, 1216),
         "landscape": (1216, 832),
-        "cfg": 3.5,
+        # Flux Dev is guidance-distilled: KSampler.cfg MUST be 1.0.
+        # Real prompt-adherence dial lives on the FluxGuidance node (see "guidance" below).
+        # Source: https://comfyanonymous.github.io/ComfyUI_examples/flux/
+        "cfg": 1.0,
+        "guidance": 3.5,
         "sampler": "euler",
         "scheduler": "simple",
         "steps": 20,
@@ -658,7 +662,10 @@ MODEL_FAMILY_DEFAULTS: dict[str, dict[str, Any]] = {
         "height": 1024,
         "portrait": (832, 1216),
         "landscape": (1216, 832),
+        # Schnell is also distilled; FluxGuidance is typically left at 3.5 but
+        # has minimal effect since the model is trained for 4 steps regardless.
         "cfg": 1.0,
+        "guidance": 3.5,
         "sampler": "euler",
         "scheduler": "simple",
         "steps": 4,
@@ -694,6 +701,14 @@ def detect_model_family(model_name: str, base_model: str | None = None) -> str |
     name_lower = model_name.lower()
     base_lower = (base_model or "").lower()
 
+    # Architecture override: filename containing "flux" wins over any base_model
+    # field (handles hybrid models like "FluxPony" that CivitAI tags as "Pony"
+    # but are architecturally Flux and need the Flux workflow).
+    if "flux" in name_lower:
+        if "schnell" in name_lower:
+            return "flux_schnell"
+        return "flux"
+
     # Check base_model field first (most reliable from CivitAI)
     if base_lower:
         if "pony" in base_lower:
@@ -722,15 +737,16 @@ def detect_model_family(model_name: str, base_model: str | None = None) -> str |
             return "sdxl"
 
     # Fall back to filename heuristics (check specific variants first)
-    if "pony" in name_lower:
-        return "pony"
-    if "illustrious" in name_lower or "noob" in name_lower:
-        return "illustrious"
-    # Flux variants
+    # Flux variants take precedence — architecture wins over training dataset
+    # (e.g. "FluxPony" hybrids are Flux models trained on Pony data, not SDXL/Pony)
     if "flux" in name_lower and "schnell" in name_lower:
         return "flux_schnell"
     if "flux" in name_lower:
         return "flux"
+    if "pony" in name_lower:
+        return "pony"
+    if "illustrious" in name_lower or "noob" in name_lower:
+        return "illustrious"
     # ZImageTurbo
     if "zimage" in name_lower:
         return "zimage"

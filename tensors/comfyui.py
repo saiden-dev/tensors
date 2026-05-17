@@ -375,6 +375,9 @@ def queue_prompt(
                 error_detail = e.response.json()
                 if "error" in error_detail:
                     console.print(f"  [yellow]{error_detail['error']}[/yellow]")
+                if "node_errors" in error_detail:
+                    for node_id, errors in error_detail["node_errors"].items():
+                        console.print(f"  [yellow]Node {node_id}:[/yellow] {errors}")
             except Exception:
                 pass
         return None
@@ -661,6 +664,84 @@ LORA_LOADER_NODE: dict[str, Any] = {
     },
 }
 
+# Flux.1 Dev / Schnell workflow template (CheckpointLoaderSimple-based).
+#
+# Differs from DEFAULT_WORKFLOW_TEMPLATE in three load-bearing ways:
+# 1. KSampler.cfg is HARDCODED to 1.0. Flux is guidance-distilled; raising
+#    KSampler.cfg burns the image. Source: https://comfyanonymous.github.io/ComfyUI_examples/flux/
+# 2. The user-facing "cfg/guidance" dial is wired into the FluxGuidance node
+#    (default 3.5), which feeds the model's distilled guidance embedding.
+# 3. Negative prompt is routed through ConditioningZeroOut — Flux ignores
+#    classifier-free guidance, so negatives must be zero conditioning.
+# 4. ModelSamplingFlux applies the resolution-dependent shift schedule
+#    (defaults max_shift=1.15, base_shift=0.5) which sharpens output at
+#    non-1024² aspect ratios.
+# 5. EmptySD3LatentImage replaces EmptyLatentImage (Flux uses SD3-style latents).
+#
+# Use the all-in-one fp8 checkpoint (flux1-dev-fp8.safetensors) for the simplest
+# path; for the split-file release (UNETLoader + DualCLIPLoader + VAELoader),
+# see examples/flux1-dev/workflow.json.
+FLUX_WORKFLOW_TEMPLATE: dict[str, Any] = {
+    "100": {
+        "class_type": "CheckpointLoaderSimple",
+        "inputs": {"ckpt_name": ""},
+    },
+    "120": {
+        "class_type": "ModelSamplingFlux",
+        "inputs": {
+            "model": ["100", 0],
+            "max_shift": 1.15,
+            "base_shift": 0.5,
+            "width": 1024,
+            "height": 1024,
+        },
+    },
+    "130": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["100", 1]},
+    },
+    "131": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["100", 1]},
+    },
+    "132": {
+        "class_type": "ConditioningZeroOut",
+        "inputs": {"conditioning": ["131", 0]},
+    },
+    "140": {
+        "class_type": "FluxGuidance",
+        "inputs": {"conditioning": ["130", 0], "guidance": 3.5},
+    },
+    "150": {
+        "class_type": "EmptySD3LatentImage",
+        "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+    },
+    "160": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 0,
+            "steps": 20,
+            "cfg": 1.0,
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "denoise": 1.0,
+            "model": ["120", 0],
+            "positive": ["140", 0],
+            "negative": ["132", 0],
+            "latent_image": ["150", 0],
+        },
+    },
+    "170": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["160", 0], "vae": ["100", 2]},
+    },
+    "180": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "flux", "images": ["170", 0]},
+    },
+}
+
+
 # Default SDXL/Illustrious/Pony compatible workflow template
 # Uses separate VAE loader for better quality with modern models
 DEFAULT_WORKFLOW_TEMPLATE: dict[str, Any] = {
@@ -710,6 +791,102 @@ DEFAULT_WORKFLOW_TEMPLATE: dict[str, Any] = {
 }
 
 
+def _resolve_flux_guidance(
+    guidance: float | None,
+    cfg: float | None,
+    defaults: dict[str, Any],
+) -> float:
+    """Resolve the FluxGuidance value with the precedence:
+
+    explicit ``guidance`` > caller's ``cfg`` (re-interpreted as guidance for Flux) >
+    family preset's ``guidance`` > 3.5 (BFL recommendation).
+    """
+    if guidance is not None:
+        return float(guidance)
+    if cfg is not None:
+        return float(cfg)
+    return float(defaults.get("guidance", 3.5))
+
+
+def _build_flux_workflow(
+    prompt: str,
+    model: str | None,
+    seed: int,
+    steps: int,
+    sampler: str,
+    scheduler: str,
+    width: int,
+    height: int,
+    batch_size: int,
+    lora_name: str | None,
+    lora_strength: float,
+    vae: str | None,
+    guidance: float,
+) -> dict[str, Any]:
+    """Build a Flux Dev/Schnell workflow.
+
+    KSampler.cfg is force-locked to 1.0; the caller's intended CFG/guidance is
+    routed to the FluxGuidance node. ModelSamplingFlux is wired with width/height
+    matching the latent so the noise-shift schedule is correct.
+    """
+    workflow = copy.deepcopy(FLUX_WORKFLOW_TEMPLATE)
+
+    # Set seed (random if -1)
+    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
+
+    # Checkpoint
+    if model:
+        workflow["100"]["inputs"]["ckpt_name"] = model
+
+    # ModelSamplingFlux must match the latent dimensions
+    workflow["120"]["inputs"]["width"] = width
+    workflow["120"]["inputs"]["height"] = height
+
+    # Prompts (positive only — negative is zero'd via ConditioningZeroOut)
+    workflow["130"]["inputs"]["text"] = prompt
+
+    # FluxGuidance carries the real prompt-adherence dial
+    workflow["140"]["inputs"]["guidance"] = guidance
+
+    # Latent
+    workflow["150"]["inputs"]["width"] = width
+    workflow["150"]["inputs"]["height"] = height
+    workflow["150"]["inputs"]["batch_size"] = batch_size
+
+    # KSampler — cfg stays 1.0
+    workflow["160"]["inputs"]["seed"] = actual_seed
+    workflow["160"]["inputs"]["steps"] = steps
+    workflow["160"]["inputs"]["sampler_name"] = sampler
+    workflow["160"]["inputs"]["scheduler"] = scheduler
+
+    # Optional external VAE — fall back to checkpoint's built-in if not provided
+    if vae:
+        workflow["171"] = {
+            "class_type": "VAELoader",
+            "inputs": {"vae_name": vae},
+        }
+        workflow["170"]["inputs"]["vae"] = ["171", 0]
+
+    # Optional LoRA injected between checkpoint and ModelSamplingFlux
+    if lora_name:
+        workflow["110"] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "model": ["100", 0],
+                "clip": ["100", 1],
+                "lora_name": lora_name,
+                "strength_model": lora_strength,
+                "strength_clip": lora_strength,
+            },
+        }
+        # Reroute downstream consumers from checkpoint to LoRA outputs
+        workflow["120"]["inputs"]["model"] = ["110", 0]
+        workflow["130"]["inputs"]["clip"] = ["110", 1]
+        workflow["131"]["inputs"]["clip"] = ["110", 1]
+
+    return workflow
+
+
 def _build_workflow(
     prompt: str,
     negative_prompt: str = "",
@@ -726,20 +903,28 @@ def _build_workflow(
     batch_size: int = 1,
     vae: str | None = None,
     orientation: str = "square",
+    guidance: float | None = None,
 ) -> dict[str, Any]:
     """Build a text-to-image workflow from parameters.
 
     Parameters set to None are auto-resolved from the checkpoint's family preset
     via config.get_model_generation_defaults(). User-provided values always win.
 
+    For Flux Dev/Schnell models, the workflow dispatches to FLUX_WORKFLOW_TEMPLATE
+    which wires FluxGuidance + ConditioningZeroOut + ModelSamplingFlux around a
+    KSampler locked to cfg=1.0 (Flux is guidance-distilled, real prompt-adherence
+    lives on FluxGuidance). The ``guidance`` param maps to FluxGuidance; if not
+    provided, falls back to ``cfg`` (treated as guidance for Flux), then preset.
+
     Args:
         prompt: Positive prompt text
-        negative_prompt: Negative prompt text
+        negative_prompt: Negative prompt text (zeroed-out for Flux)
         model: Checkpoint filename (if None, uses first available)
         width: Image width (None = use preset for orientation)
         height: Image height (None = use preset for orientation)
         steps: Number of sampling steps (None = use preset)
-        cfg: CFG scale (None = use preset)
+        cfg: CFG scale (None = use preset). For Flux models, this is interpreted
+            as the FluxGuidance value if ``guidance`` is not explicitly set.
         seed: Random seed (-1 for random)
         sampler: Sampler name (None = use preset)
         scheduler: Scheduler name (None = use preset)
@@ -748,6 +933,7 @@ def _build_workflow(
         batch_size: Number of images to generate in one workflow (default 1)
         vae: VAE filename (None = use preset)
         orientation: Resolution orientation: "square", "portrait", or "landscape"
+        guidance: FluxGuidance value (Flux only; default = preset 3.5)
 
     Returns:
         ComfyUI workflow dict
@@ -756,9 +942,10 @@ def _build_workflow(
 
     # Get preset defaults for this checkpoint family
     defaults = get_model_generation_defaults(model or "") if model else get_model_generation_defaults("")
+    family = defaults.get("family")
 
     # Resolve orientation-based resolution
-    res_w, res_h = resolve_orientation(defaults.get("family"), orientation)
+    res_w, res_h = resolve_orientation(family, orientation)
 
     # Merge: user overrides > preset defaults
     resolved_sampler = sampler if sampler is not None else defaults.get("sampler", "euler")
@@ -768,6 +955,24 @@ def _build_workflow(
     resolved_width = width if width is not None else res_w
     resolved_height = height if height is not None else res_h
     resolved_vae = vae if vae is not None else defaults.get("vae")
+
+    # Dispatch to Flux-specific template when the family is flux/flux_schnell.
+    if family in ("flux", "flux_schnell"):
+        return _build_flux_workflow(
+            prompt=prompt,
+            model=model,
+            seed=seed,
+            steps=resolved_steps,
+            sampler=resolved_sampler,
+            scheduler=resolved_scheduler,
+            width=resolved_width,
+            height=resolved_height,
+            batch_size=batch_size,
+            lora_name=lora_name,
+            lora_strength=lora_strength,
+            vae=resolved_vae,
+            guidance=_resolve_flux_guidance(guidance, cfg, defaults),
+        )
 
     workflow = copy.deepcopy(DEFAULT_WORKFLOW_TEMPLATE)
 
@@ -846,11 +1051,14 @@ def generate_image(
     batch_size: int = 1,
     vae: str | None = None,
     orientation: str = "square",
+    guidance: float | None = None,
 ) -> GenerationResult | None:
     """Generate an image using a simple text-to-image workflow.
 
     Parameters set to None are auto-resolved from the checkpoint's family preset.
-    User-provided values always override preset defaults.
+    User-provided values always override preset defaults. For Flux Dev/Schnell
+    checkpoints, ``guidance`` controls the FluxGuidance node (defaults to 3.5);
+    KSampler cfg is locked to 1.0 by the Flux template.
 
     Args:
         prompt: Positive prompt text
@@ -907,6 +1115,7 @@ def generate_image(
         batch_size=batch_size,
         vae=vae,
         orientation=orientation,
+        guidance=guidance,
     )
 
     # Run workflow

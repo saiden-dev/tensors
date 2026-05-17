@@ -359,14 +359,20 @@ class TestModelFamilyDetection:
         assert defaults["cfg"] == 6.5
 
     def test_get_model_generation_defaults_flux(self) -> None:
-        """Test getting generation defaults for Flux models."""
+        """Test getting generation defaults for Flux models.
+
+        Flux Dev is guidance-distilled: KSampler.cfg MUST be 1.0; the real
+        prompt-adherence dial is the FluxGuidance node's ``guidance`` value.
+        See https://comfyanonymous.github.io/ComfyUI_examples/flux/
+        """
         from tensors.config import get_model_generation_defaults
 
         defaults = get_model_generation_defaults("flux1-dev-fp8.safetensors")
         assert defaults["family"] == "flux"
         assert defaults["sampler"] == "euler"
         assert defaults["scheduler"] == "simple"
-        assert defaults["cfg"] == 3.5
+        assert defaults["cfg"] == 1.0
+        assert defaults["guidance"] == 3.5
 
     def test_get_model_generation_defaults_flux_schnell(self) -> None:
         """Test getting generation defaults for Flux Schnell models."""
@@ -376,6 +382,7 @@ class TestModelFamilyDetection:
         assert defaults["family"] == "flux_schnell"
         assert defaults["steps"] == 4
         assert defaults["cfg"] == 1.0
+        assert defaults["guidance"] == 3.5
 
     def test_detect_zimage(self) -> None:
         """Test detecting ZImageTurbo family."""
@@ -426,6 +433,104 @@ class TestModelFamilyDetection:
         assert defaults["family"] is None
         assert defaults["sampler"] == "dpmpp_2m"
         assert defaults["scheduler"] == "karras"
+
+
+class TestFluxWorkflowBuilder:
+    """Tests for the Flux-specific branch of _build_workflow."""
+
+    def test_flux_dispatch_uses_flux_template(self) -> None:
+        """Building a workflow for a Flux model emits the Flux node graph."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(prompt="a cat", model="flux1-dev-fp8.safetensors")
+
+        # Flux template uses node IDs in the 100s; default SDXL template uses single digits.
+        assert "100" in wf and wf["100"]["class_type"] == "CheckpointLoaderSimple"
+        assert "120" in wf and wf["120"]["class_type"] == "ModelSamplingFlux"
+        assert "140" in wf and wf["140"]["class_type"] == "FluxGuidance"
+        assert "132" in wf and wf["132"]["class_type"] == "ConditioningZeroOut"
+        assert "150" in wf and wf["150"]["class_type"] == "EmptySD3LatentImage"
+        assert "3" not in wf  # default SDXL KSampler ID must NOT be present
+
+    def test_flux_ksampler_cfg_locked_to_one(self) -> None:
+        """KSampler cfg MUST be 1.0 for Flux Dev — caller cfg must NOT leak through."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(prompt="a cat", model="flux1-dev-fp8.safetensors", cfg=7.5)
+        assert wf["160"]["inputs"]["cfg"] == 1.0
+        # The caller's cfg=7.5 should be re-routed to FluxGuidance
+        assert wf["140"]["inputs"]["guidance"] == 7.5
+
+    def test_flux_explicit_guidance_wins_over_cfg(self) -> None:
+        """Explicit guidance overrides re-interpreted cfg."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(prompt="a cat", model="flux1-dev-fp8.safetensors", cfg=7.5, guidance=4.0)
+        assert wf["140"]["inputs"]["guidance"] == 4.0
+
+    def test_flux_default_guidance_from_preset(self) -> None:
+        """No caller value -> preset guidance (3.5) wins."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(prompt="a cat", model="flux1-dev-fp8.safetensors")
+        assert wf["140"]["inputs"]["guidance"] == 3.5
+
+    def test_flux_lora_injection(self) -> None:
+        """LoRA injects node 110 and reroutes ModelSamplingFlux + CLIPTextEncodes."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(
+            prompt="a cat",
+            model="flux1-dev-fp8.safetensors",
+            lora_name="my_style.safetensors",
+            lora_strength=0.7,
+        )
+        assert "110" in wf and wf["110"]["class_type"] == "LoraLoader"
+        assert wf["110"]["inputs"]["lora_name"] == "my_style.safetensors"
+        assert wf["110"]["inputs"]["strength_model"] == 0.7
+        # Downstream consumers must read from the LoRA node
+        assert wf["120"]["inputs"]["model"] == ["110", 0]
+        assert wf["130"]["inputs"]["clip"] == ["110", 1]
+        assert wf["131"]["inputs"]["clip"] == ["110", 1]
+
+    def test_flux_external_vae_swaps_decoder_input(self) -> None:
+        """Providing an external VAE adds node 171 (VAELoader) and rewires VAEDecode."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(
+            prompt="a cat",
+            model="flux1-dev-fp8.safetensors",
+            vae="ae.safetensors",
+        )
+        assert "171" in wf and wf["171"]["class_type"] == "VAELoader"
+        assert wf["171"]["inputs"]["vae_name"] == "ae.safetensors"
+        assert wf["170"]["inputs"]["vae"] == ["171", 0]
+
+    def test_flux_model_sampling_dimensions_match_latent(self) -> None:
+        """ModelSamplingFlux width/height must equal the latent dimensions for correct shift."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(
+            prompt="a cat",
+            model="flux1-dev-fp8.safetensors",
+            width=1216,
+            height=832,
+        )
+        assert wf["120"]["inputs"]["width"] == 1216
+        assert wf["120"]["inputs"]["height"] == 832
+        assert wf["150"]["inputs"]["width"] == 1216
+        assert wf["150"]["inputs"]["height"] == 832
+
+    def test_non_flux_model_uses_default_template(self) -> None:
+        """SDXL/Pony/etc. checkpoints continue to use the legacy template."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(prompt="a cat", model="ponyDiffusionV6XL.safetensors")
+        # Default SDXL template has KSampler at node "3"
+        assert "3" in wf and wf["3"]["class_type"] == "KSampler"
+        # Flux-specific nodes must NOT be present
+        assert "140" not in wf
+        assert "120" not in wf
 
 
 class TestDisplayFormatters:
