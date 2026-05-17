@@ -1682,7 +1682,7 @@ def style_sweep(  # noqa: PLR0915
         except typer.Exit as ex:
             res["duration_sec"] = round(time.perf_counter() - start, 2)
             res["error"] = f"generate exited with code {ex.exit_code}"
-        except Exception as ex:  # noqa: BLE001
+        except Exception as ex:
             res["duration_sec"] = round(time.perf_counter() - start, 2)
             res["error"] = str(ex)
         return res
@@ -1735,7 +1735,7 @@ def style_sweep(  # noqa: PLR0915
                 idx, _entry, _res, _out_path = task
                 try:
                     res = fut.result()
-                except Exception as ex:  # noqa: BLE001
+                except Exception as ex:
                     # Pathological — _run_one is supposed to catch everything.
                     # Re-build a result dict so the manifest is still well-formed.
                     res = {

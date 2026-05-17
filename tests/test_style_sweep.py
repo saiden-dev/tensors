@@ -619,7 +619,7 @@ def test_parallel_queue_manifest_preserves_source_order(
             out.write_bytes(b"png")
         calls.append(kwargs)
 
-    import tensors.cli as cli_module  # noqa: PLC0415
+    import tensors.cli as cli_module
 
     cli_module._run_generation = staggered_fake  # type: ignore[assignment]
 
@@ -694,7 +694,7 @@ def test_parallel_queue_continues_after_individual_failure(
             out.write_bytes(b"png")
         calls.append(kwargs)
 
-    import tensors.cli as cli_module  # noqa: PLC0415
+    import tensors.cli as cli_module
 
     cli_module._run_generation = selective_fail  # type: ignore[assignment]
 
