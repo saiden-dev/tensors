@@ -1324,12 +1324,12 @@ def _normalize_styles(styles_data: Any) -> list[dict[str, str]]:
 @app.command(name="style-sweep")
 def style_sweep(  # noqa: PLR0915
     template: Annotated[
-        Path,
+        Path | None,
         typer.Option("--template", "-t", help="Path to template JSON (mirrors `generate --input` keys + output_dir/styles)"),
-    ],
+    ] = None,
     styles: Annotated[
         str | None,
-        typer.Option("--styles", help="Override styles source: path to JSON or inline JSON list/object"),
+        typer.Option("--styles", help="Styles source: path to JSON or inline JSON list/object (overrides template's styles)"),
     ] = None,
     output_dir: Annotated[
         Path | None,
@@ -1337,8 +1337,16 @@ def style_sweep(  # noqa: PLR0915
     ] = None,
     limit: Annotated[
         int | None,
-        typer.Option("--limit", help="Stop after N styles (useful for testing)"),
+        typer.Option("--limit", help="Stop after N styles (applied after --style filter)"),
     ] = None,
+    style_filter: Annotated[
+        list[str] | None,
+        typer.Option("--style", "-S", help="Only run the named slug(s); repeatable for multiple"),
+    ] = None,
+    list_styles: Annotated[
+        bool,
+        typer.Option("--list", "-L", help="Print resolved styles list and exit; no generation"),
+    ] = False,
     skip_existing: Annotated[
         bool,
         typer.Option("--skip-existing/--no-skip-existing", help="Skip styles whose output file already exists"),
@@ -1364,41 +1372,61 @@ def style_sweep(  # noqa: PLR0915
 
     Writes a manifest at {output_dir}/_sweep.json with per-style results.
 
+    With --list, just prints the resolved styles list (template optional in that
+    case if --styles is provided directly).
+
     Examples:
         tsr style-sweep --template woman-black-dress.json
         tsr style-sweep -t template.json --styles styles.json --limit 3
         tsr style-sweep -t template.json --dry-run
         tsr style-sweep -t template.json --remote junkpile
+        tsr style-sweep -t template.json --list
+        tsr style-sweep --styles styles.json --list
+        tsr style-sweep -t template.json -S 38-manara -S 40-elder-kurtzman
     """
-    # ---- Load template ----
-    if not template.is_file():
-        console.print(f"[red]Template file not found:[/red] {template}")
-        raise typer.Exit(1)
-    try:
-        tpl_data = json.loads(template.read_text())
-    except json.JSONDecodeError as e:
-        console.print(f"[red]Invalid JSON in template {template}:[/red] {e}")
-        raise typer.Exit(1) from e
-    if not isinstance(tpl_data, dict):
-        console.print("[red]Template JSON must be an object[/red]")
+    # ---- Validate required inputs ----
+    # Template is required for generation, but optional when --list is paired
+    # with an explicit --styles source.
+    if template is None and not (list_styles and styles is not None):
+        console.print(
+            "[red]--template is required (or use --list with --styles to inspect a styles file)[/red]"
+        )
         raise typer.Exit(1)
 
-    # Warn on unknown keys (don't error — forward-compat)
-    unknown = {k for k in tpl_data if not k.startswith("_") and k not in _STYLE_SWEEP_TEMPLATE_KEYS}
-    if unknown:
-        console.print(f"[yellow]Unknown template keys ignored:[/yellow] {sorted(unknown)}")
+    # ---- Load template (if provided) ----
+    tpl_data: dict[str, Any] = {}
+    if template is not None:
+        if not template.is_file():
+            console.print(f"[red]Template file not found:[/red] {template}")
+            raise typer.Exit(1)
+        try:
+            tpl_data = json.loads(template.read_text())
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid JSON in template {template}:[/red] {e}")
+            raise typer.Exit(1) from e
+        if not isinstance(tpl_data, dict):
+            console.print("[red]Template JSON must be an object[/red]")
+            raise typer.Exit(1)
 
-    base_prompt = tpl_data.get("prompt")
-    if not base_prompt or not isinstance(base_prompt, str):
+        # Warn on unknown keys (don't error — forward-compat)
+        unknown = {k for k in tpl_data if not k.startswith("_") and k not in _STYLE_SWEEP_TEMPLATE_KEYS}
+        if unknown:
+            console.print(f"[yellow]Unknown template keys ignored:[/yellow] {sorted(unknown)}")
+
+    # base_prompt is required for generation but irrelevant for --list
+    base_prompt = tpl_data.get("prompt") if template is not None else None
+    if not list_styles and (not base_prompt or not isinstance(base_prompt, str)):
         console.print("[red]Template missing required 'prompt' string[/red]")
         raise typer.Exit(1)
 
     # ---- Resolve styles source ----
     # Relative paths inside the template are resolved against the template's
     # directory (so templates can ship next to their styles files).
-    tpl_dir = template.resolve().parent
+    tpl_dir = template.resolve().parent if template is not None else None
 
     def _resolve_relative_to_template(val: str) -> str:
+        if tpl_dir is None:
+            return val
         p = Path(val)
         if not p.is_absolute() and not p.exists():
             alt = tpl_dir / p
@@ -1425,11 +1453,31 @@ def style_sweep(  # noqa: PLR0915
         raise typer.Exit(1)
 
     style_entries = _normalize_styles(styles_source)
+
+    # ---- Apply --style filter (exact slug match) ----
+    if style_filter:
+        available = [e["slug"] for e in style_entries]
+        wanted = list(style_filter)
+        unknown_slugs = [s for s in wanted if s not in available]
+        if unknown_slugs:
+            console.print(f"[red]Unknown style slug(s):[/red] {', '.join(unknown_slugs)}")
+            console.print(f"[dim]Available slugs ({len(available)}):[/dim] {', '.join(available)}")
+            raise typer.Exit(1)
+        # Preserve order of the original styles list, but only keep wanted slugs
+        wanted_set = set(wanted)
+        style_entries = [e for e in style_entries if e["slug"] in wanted_set]
+
+    # ---- Apply --limit (after filter) ----
     if limit is not None:
         if limit < 0:
             console.print("[red]--limit must be >= 0[/red]")
             raise typer.Exit(1)
         style_entries = style_entries[:limit]
+
+    # ---- --list short-circuit: print and exit ----
+    if list_styles:
+        _print_styles_list(styles_origin, style_entries)
+        return
 
     # ---- Resolve output directory ----
     out_dir: Path
@@ -1588,6 +1636,21 @@ def _write_sweep_manifest(
     }
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     return manifest_path
+
+
+def _print_styles_list(styles_origin: str, entries: list[dict[str, str]]) -> None:
+    """Render the resolved styles as a two-column table. Suffixes truncated to ~80 chars."""
+    max_suffix = 80
+    console.print(f"[bold]Styles:[/bold] {styles_origin} ({len(entries)} entries)")
+    table = Table(show_header=True, header_style="bold", box=None, pad_edge=False)
+    table.add_column("SLUG", style="cyan", no_wrap=True)
+    table.add_column("SUFFIX", overflow="fold")
+    for entry in entries:
+        suffix = entry["suffix"]
+        if len(suffix) > max_suffix:
+            suffix = suffix[: max_suffix - 1].rstrip() + "…"
+        table.add_row(entry["slug"], suffix)
+    console.print(table)
 
 
 # =============================================================================

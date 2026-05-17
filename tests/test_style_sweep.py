@@ -335,3 +335,199 @@ def test_remote_override(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
 
     assert result.exit_code == 0, result.output
     assert calls[0]["remote"] == "junkpile"
+
+
+# -----------------------------------------------------------------------------
+# --list flag
+# -----------------------------------------------------------------------------
+
+
+def test_list_flag_prints_slugs(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """--list prints all slugs and does not call generate."""
+    out_dir = tmp_path / "out"
+    slugs = [f"{i:02d}-style" for i in range(1, 5)]
+    styles_file = _write_styles_file(
+        tmp_path, [{"slug": s, "suffix": f"suffix for {s}"} for s in slugs]
+    )
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    result = runner.invoke(app, ["style-sweep", "--template", str(tpl), "--list"])
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 0
+    for slug in slugs:
+        assert slug in result.output
+    # Header line names the file and count
+    assert "4 entries" in result.output
+    # No manifest written
+    assert not (out_dir / "_sweep.json").exists()
+
+
+def test_list_with_limit(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """--list --limit N restricts the table to the first N entries."""
+    out_dir = tmp_path / "out"
+    styles_file = _write_styles_file(
+        tmp_path, [{"slug": f"{i:02d}-x", "suffix": f"s{i}"} for i in range(1, 6)]
+    )
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    result = runner.invoke(
+        app, ["style-sweep", "--template", str(tpl), "--list", "--limit", "2"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "01-x" in result.output
+    assert "02-x" in result.output
+    assert "03-x" not in result.output
+    assert "05-x" not in result.output
+
+
+def test_list_without_template(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """--styles + --list works without --template."""
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "alpha", "suffix": "Alpha suffix"},
+            {"slug": "beta", "suffix": "Beta suffix"},
+        ],
+    )
+
+    result = runner.invoke(
+        app, ["style-sweep", "--styles", str(styles_file), "--list"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "alpha" in result.output
+    assert "beta" in result.output
+    assert "2 entries" in result.output
+
+
+def test_list_long_suffix_truncated(tmp_path: Path) -> None:
+    """Long suffixes are truncated with an ellipsis."""
+    long_suffix = "very long " * 20  # ~200 chars
+    styles_file = _write_styles_file(
+        tmp_path, [{"slug": "long", "suffix": long_suffix}]
+    )
+
+    result = runner.invoke(
+        app, ["style-sweep", "--styles", str(styles_file), "--list"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "long" in result.output
+    assert "…" in result.output
+    # Full suffix should not appear verbatim
+    assert long_suffix not in result.output
+
+
+# -----------------------------------------------------------------------------
+# --style filter
+# -----------------------------------------------------------------------------
+
+
+def test_style_filter_single(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """--style SLUG only runs the matching entry."""
+    out_dir = tmp_path / "out"
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-foo", "suffix": "Foo"},
+            {"slug": "02-bar", "suffix": "Bar"},
+            {"slug": "03-baz", "suffix": "Baz"},
+        ],
+    )
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    result = runner.invoke(
+        app, ["style-sweep", "--template", str(tpl), "--style", "02-bar"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert calls[0]["output"] == out_dir / "02-bar.png"
+    assert calls[0]["prompt"].endswith("Bar")
+
+
+def test_style_filter_multiple(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """Multiple --style flags select multiple entries (preserving styles-file order)."""
+    out_dir = tmp_path / "out"
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-a", "suffix": "A"},
+            {"slug": "02-b", "suffix": "B"},
+            {"slug": "03-c", "suffix": "C"},
+            {"slug": "04-d", "suffix": "D"},
+        ],
+    )
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    # Note: pass in non-sorted order; filter should preserve source order.
+    result = runner.invoke(
+        app,
+        [
+            "style-sweep",
+            "--template", str(tpl),
+            "-S", "03-c",
+            "-S", "01-a",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 2
+    assert calls[0]["output"].name == "01-a.png"
+    assert calls[1]["output"].name == "03-c.png"
+
+
+def test_style_filter_unknown_slug(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """An unknown slug aborts with exit 1 and lists available slugs."""
+    out_dir = tmp_path / "out"
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-foo", "suffix": "Foo"},
+            {"slug": "02-bar", "suffix": "Bar"},
+        ],
+    )
+    tpl = _write_template(tmp_path, output_dir=out_dir, styles=str(styles_file))
+
+    result = runner.invoke(
+        app, ["style-sweep", "--template", str(tpl), "--style", "99-nope"]
+    )
+
+    assert result.exit_code == 1, result.output
+    assert "99-nope" in result.output
+    # Available slugs printed for the user
+    assert "01-foo" in result.output
+    assert "02-bar" in result.output
+    # No generation
+    assert len(calls) == 0
+
+
+def test_style_filter_with_list(tmp_path: Path, calls: list[dict[str, Any]]) -> None:
+    """--list --style SLUG shows only the filtered entry."""
+    styles_file = _write_styles_file(
+        tmp_path,
+        [
+            {"slug": "01-foo", "suffix": "Foo suffix"},
+            {"slug": "02-bar", "suffix": "Bar suffix"},
+            {"slug": "03-baz", "suffix": "Baz suffix"},
+        ],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "style-sweep",
+            "--styles", str(styles_file),
+            "--list",
+            "--style", "02-bar",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 0
+    assert "02-bar" in result.output
+    assert "01-foo" not in result.output
+    assert "03-baz" not in result.output
+    assert "1 entries" in result.output
