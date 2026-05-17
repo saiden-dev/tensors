@@ -1221,6 +1221,376 @@ def _run_generation(  # noqa: PLR0915
 
 
 # =============================================================================
+# Style Sweep
+# =============================================================================
+
+
+# Keys that style-sweep templates accept (mirror of `generate --input` keys, plus
+# two sweep-specific keys: output_dir and styles).
+_STYLE_SWEEP_TEMPLATE_KEYS = {
+    "prompt",
+    "model",
+    "width",
+    "height",
+    "steps",
+    "cfg",
+    "guidance",
+    "seed",
+    "sampler",
+    "scheduler",
+    "vae",
+    "lora",
+    "lora_strength",
+    "negative",
+    "negative_prompt",
+    "orientation",
+    "no_quality",
+    "no_negative",
+    "rating",
+    "family",
+    "remote",
+    # sweep-specific
+    "output_dir",
+    "styles",
+}
+
+
+def _load_json_file_or_inline(value: str | list | dict, *, what: str) -> Any:
+    """Load JSON from a file path or accept already-parsed inline data.
+
+    `value` may be a path string, a JSON string, or an already-parsed list/dict
+    (e.g. when read out of a template). Raises typer.Exit on failure.
+    """
+    if isinstance(value, (list, dict)):
+        return value
+    if not isinstance(value, str):
+        console.print(f"[red]Invalid {what} value (expected path, JSON string, or inline data)[/red]")
+        raise typer.Exit(1)
+
+    path = Path(value)
+    if path.is_file():
+        try:
+            return json.loads(path.read_text())
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid JSON in {what} file {path}:[/red] {e}")
+            raise typer.Exit(1) from e
+
+    stripped = value.lstrip()
+    if stripped.startswith(("{", "[")):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError as e:
+            console.print(f"[red]Invalid inline JSON for {what}:[/red] {e}")
+            raise typer.Exit(1) from e
+
+    console.print(f"[red]{what.capitalize()} is neither a readable file nor inline JSON:[/red] {value}")
+    raise typer.Exit(1)
+
+
+def _normalize_styles(styles_data: Any) -> list[dict[str, str]]:
+    """Coerce styles data into a flat list of {slug, suffix} dicts."""
+    if isinstance(styles_data, dict):
+        entries = styles_data.get("styles")
+        if entries is None:
+            console.print("[red]Styles object missing 'styles' key[/red]")
+            raise typer.Exit(1)
+    elif isinstance(styles_data, list):
+        entries = styles_data
+    else:
+        console.print("[red]Styles data must be an object with 'styles' key or a list[/red]")
+        raise typer.Exit(1)
+
+    if not isinstance(entries, list) or not entries:
+        console.print("[red]Styles list is empty or not a list[/red]")
+        raise typer.Exit(1)
+
+    normalized: list[dict[str, str]] = []
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            console.print(f"[red]Style entry #{i} is not an object[/red]")
+            raise typer.Exit(1)
+        slug = entry.get("slug")
+        suffix = entry.get("suffix")
+        if not slug or not isinstance(slug, str):
+            console.print(f"[red]Style entry #{i} missing/invalid 'slug'[/red]")
+            raise typer.Exit(1)
+        if suffix is None or not isinstance(suffix, str):
+            console.print(f"[red]Style entry #{i} ({slug}) missing/invalid 'suffix'[/red]")
+            raise typer.Exit(1)
+        normalized.append({"slug": slug, "suffix": suffix})
+    return normalized
+
+
+@app.command(name="style-sweep")
+def style_sweep(  # noqa: PLR0915
+    template: Annotated[
+        Path,
+        typer.Option("--template", "-t", help="Path to template JSON (mirrors `generate --input` keys + output_dir/styles)"),
+    ],
+    styles: Annotated[
+        str | None,
+        typer.Option("--styles", help="Override styles source: path to JSON or inline JSON list/object"),
+    ] = None,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option("--output-dir", help="Override output directory from template"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Stop after N styles (useful for testing)"),
+    ] = None,
+    skip_existing: Annotated[
+        bool,
+        typer.Option("--skip-existing/--no-skip-existing", help="Skip styles whose output file already exists"),
+    ] = True,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print planned prompts/paths without invoking generate"),
+    ] = False,
+    continue_on_error: Annotated[
+        bool,
+        typer.Option("--continue-on-error/--abort-on-error", help="Keep going after individual style failures"),
+    ] = True,
+    remote: Annotated[
+        str | None,
+        typer.Option("-r", "--remote", help="Remote server name or URL (overrides template)"),
+    ] = None,
+) -> None:
+    """Sweep a base prompt across a list of style suffixes, one image per style.
+
+    Loads a template JSON with the base prompt + generation params, plus a styles
+    JSON listing {slug, suffix} entries. For each style, composes
+    "{prompt}, {suffix}" and renders to {output_dir}/{slug}.png.
+
+    Writes a manifest at {output_dir}/_sweep.json with per-style results.
+
+    Examples:
+        tsr style-sweep --template woman-black-dress.json
+        tsr style-sweep -t template.json --styles styles.json --limit 3
+        tsr style-sweep -t template.json --dry-run
+        tsr style-sweep -t template.json --remote junkpile
+    """
+    # ---- Load template ----
+    if not template.is_file():
+        console.print(f"[red]Template file not found:[/red] {template}")
+        raise typer.Exit(1)
+    try:
+        tpl_data = json.loads(template.read_text())
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Invalid JSON in template {template}:[/red] {e}")
+        raise typer.Exit(1) from e
+    if not isinstance(tpl_data, dict):
+        console.print("[red]Template JSON must be an object[/red]")
+        raise typer.Exit(1)
+
+    # Warn on unknown keys (don't error — forward-compat)
+    unknown = {k for k in tpl_data if not k.startswith("_") and k not in _STYLE_SWEEP_TEMPLATE_KEYS}
+    if unknown:
+        console.print(f"[yellow]Unknown template keys ignored:[/yellow] {sorted(unknown)}")
+
+    base_prompt = tpl_data.get("prompt")
+    if not base_prompt or not isinstance(base_prompt, str):
+        console.print("[red]Template missing required 'prompt' string[/red]")
+        raise typer.Exit(1)
+
+    # ---- Resolve styles source ----
+    # Relative paths inside the template are resolved against the template's
+    # directory (so templates can ship next to their styles files).
+    tpl_dir = template.resolve().parent
+
+    def _resolve_relative_to_template(val: str) -> str:
+        p = Path(val)
+        if not p.is_absolute() and not p.exists():
+            alt = tpl_dir / p
+            if alt.exists():
+                return str(alt)
+        return val
+
+    styles_source: Any
+    styles_origin: str
+    if styles is not None:
+        styles_origin = styles
+        styles_source = _load_json_file_or_inline(styles, what="styles")
+    elif "styles" in tpl_data:
+        tpl_styles = tpl_data["styles"]
+        if isinstance(tpl_styles, list):
+            styles_origin = "<inline in template>"
+            styles_source = tpl_styles
+        else:
+            resolved = _resolve_relative_to_template(tpl_styles)
+            styles_origin = resolved
+            styles_source = _load_json_file_or_inline(resolved, what="styles")
+    else:
+        console.print("[red]No styles specified (use --styles or set 'styles' in template)[/red]")
+        raise typer.Exit(1)
+
+    style_entries = _normalize_styles(styles_source)
+    if limit is not None:
+        if limit < 0:
+            console.print("[red]--limit must be >= 0[/red]")
+            raise typer.Exit(1)
+        style_entries = style_entries[:limit]
+
+    # ---- Resolve output directory ----
+    out_dir: Path
+    if output_dir is not None:
+        out_dir = output_dir
+    elif "output_dir" in tpl_data:
+        out_dir = Path(tpl_data["output_dir"])
+    else:
+        console.print("[red]No output_dir specified (use --output-dir or set 'output_dir' in template)[/red]")
+        raise typer.Exit(1)
+
+    if not dry_run:
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ---- Resolve generate params from template ----
+    def _t(key: str, *, cast: Any = None, default: Any = None) -> Any:
+        val = tpl_data.get(key, default)
+        if val is None or cast is None:
+            return val
+        try:
+            return cast(val)
+        except (TypeError, ValueError):
+            return val
+
+    # Accept both "negative" and "negative_prompt" keys
+    negative_val = tpl_data.get("negative", tpl_data.get("negative_prompt", "")) or ""
+
+    gen_remote = remote if remote is not None else tpl_data.get("remote")
+
+    # ---- Execute sweep ----
+    import time  # noqa: PLC0415
+
+    total = len(style_entries)
+    console.print(f"[bold]Style sweep:[/bold] {total} styles → {out_dir}")
+    console.print(f"[dim]Template: {template}[/dim]")
+    console.print(f"[dim]Styles:   {styles_origin}[/dim]")
+    if dry_run:
+        console.print("[yellow]DRY RUN — no generation calls will be made[/yellow]")
+
+    results: list[dict[str, Any]] = []
+    failed_slugs: list[str] = []
+
+    for i, entry in enumerate(style_entries, start=1):
+        slug = entry["slug"]
+        suffix = entry["suffix"]
+        composed_prompt = f"{base_prompt}, {suffix}"
+        out_path = out_dir / f"{slug}.png"
+
+        result: dict[str, Any] = {
+            "slug": slug,
+            "prompt": composed_prompt,
+            "output": str(out_path),
+            "seed": _t("seed", cast=int, default=-1),
+            "duration_sec": 0.0,
+            "success": False,
+            "error": None,
+        }
+
+        # Skip if exists
+        if skip_existing and out_path.exists():
+            console.print(f"[dim]\\[{i}/{total}] {slug} skip (exists)[/dim]")
+            result["success"] = True
+            result["skipped"] = True
+            results.append(result)
+            continue
+
+        if dry_run:
+            console.print(f"\\[{i}/{total}] {slug}")
+            console.print(f"    [dim]prompt:[/dim] {composed_prompt}")
+            console.print(f"    [dim]output:[/dim] {out_path}")
+            result["success"] = True
+            result["dry_run"] = True
+            results.append(result)
+            continue
+
+        start = time.perf_counter()
+        try:
+            _run_generation(
+                prompt=composed_prompt,
+                model=_t("model"),
+                width=_t("width", cast=int),
+                height=_t("height", cast=int),
+                steps=_t("steps", cast=int),
+                cfg=_t("cfg", cast=float),
+                guidance=_t("guidance", cast=float),
+                seed=_t("seed", cast=int, default=-1),
+                sampler=_t("sampler"),
+                scheduler=_t("scheduler"),
+                vae=_t("vae"),
+                orientation=_t("orientation", default="square"),
+                lora=_t("lora"),
+                lora_strength=_t("lora_strength", cast=float, default=0.8),
+                negative=negative_val,
+                count=1,
+                rating=_t("rating"),
+                no_quality=bool(_t("no_quality", default=False)),
+                no_negative=bool(_t("no_negative", default=False)),
+                family=_t("family"),
+                output=out_path,
+                remote=gen_remote,
+                json_output=False,
+            )
+            duration = time.perf_counter() - start
+            result["duration_sec"] = round(duration, 2)
+            result["success"] = True
+            console.print(f"[green]\\[{i}/{total}] {slug} ok in {duration:.1f}s[/green]")
+        except typer.Exit as e:
+            duration = time.perf_counter() - start
+            result["duration_sec"] = round(duration, 2)
+            err_msg = f"generate exited with code {e.exit_code}"
+            result["error"] = err_msg
+            failed_slugs.append(slug)
+            console.print(f"[red]\\[{i}/{total}] {slug} FAIL: {err_msg}[/red]")
+            if not continue_on_error:
+                results.append(result)
+                _write_sweep_manifest(out_dir, template, styles_origin, results)
+                raise
+        except Exception as e:
+            duration = time.perf_counter() - start
+            result["duration_sec"] = round(duration, 2)
+            result["error"] = str(e)
+            failed_slugs.append(slug)
+            console.print(f"[red]\\[{i}/{total}] {slug} FAIL: {e}[/red]")
+            if not continue_on_error:
+                results.append(result)
+                _write_sweep_manifest(out_dir, template, styles_origin, results)
+                raise typer.Exit(1) from e
+
+        results.append(result)
+
+    # ---- Manifest ----
+    if not dry_run:
+        manifest_path = _write_sweep_manifest(out_dir, template, styles_origin, results)
+        console.print(f"[dim]Manifest: {manifest_path}[/dim]")
+
+    # ---- Summary ----
+    successful = sum(1 for r in results if r.get("success"))
+    console.print(f"[bold]Sweep complete:[/bold] {successful}/{len(results)} ok")
+    if failed_slugs:
+        console.print(f"[red]Failed slugs ({len(failed_slugs)}):[/red] {', '.join(failed_slugs)}")
+        raise typer.Exit(1)
+
+
+def _write_sweep_manifest(
+    out_dir: Path,
+    template_path: Path,
+    styles_origin: str,
+    results: list[dict[str, Any]],
+) -> Path:
+    """Write the per-sweep manifest JSON. Returns the path."""
+    manifest_path = out_dir / "_sweep.json"
+    manifest: dict[str, Any] = {
+        "template": str(template_path),
+        "styles_source": styles_origin,
+        "results": results,
+    }
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest_path
+
+
+# =============================================================================
 # Template Dump
 # =============================================================================
 
