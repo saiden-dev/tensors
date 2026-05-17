@@ -1051,21 +1051,8 @@ def _run_generation(  # noqa: PLR0915
     if model and not json_output and not remote:
         _validate_model_available(model, model_family, lora)
 
-    # Build enhanced prompt with quality prefix and LoRA trigger words
+    # Build enhanced prompt with quality prefix (no automatic LoRA trigger injection)
     prompt_parts: list[str] = []
-
-    # Add LoRA trigger words if using LoRA
-    if lora:
-        try:
-            with Database() as db:
-                db.init_schema()
-                trigger_words = db.get_trigger_words_by_filename(lora)
-                if trigger_words:
-                    prompt_parts.extend(trigger_words)
-                    if not json_output:
-                        console.print(f"[dim]LoRA trigger words: {', '.join(trigger_words)}[/dim]")
-        except Exception:
-            pass
 
     # Add quality prefix based on model family
     if not no_quality and family_defaults.get("quality_prefix"):
@@ -1882,16 +1869,6 @@ def template(
         tpl["lora"] = lora
         tpl["lora_strength"] = lora_strength
 
-        # Look up trigger words
-        try:
-            with Database() as db:
-                db.init_schema()
-                trigger_words = db.get_trigger_words_by_filename(lora)
-                if trigger_words:
-                    tpl["lora_triggers"] = trigger_words
-        except Exception:
-            pass
-
     # Add metadata (not used by generate, but informational)
     tpl["_family"] = family or "unknown"
     if base_model_str:
@@ -2621,6 +2598,9 @@ def comfy_generate(
         count=count,
         no_quality=no_quality,
         no_negative=no_negative,
+        rating=None,
+        family=None,
+        guidance=None,
         output=output,
         remote=None,
         json_output=json_output,
