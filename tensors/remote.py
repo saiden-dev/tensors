@@ -37,6 +37,7 @@ def remote_generate(
     vae: str | None = None,
     lora_name: str | None = None,
     lora_strength: float = 0.8,
+    guidance: float | None = None,
     console: Console | None = None,
 ) -> dict[str, Any] | None:
     """Generate an image via remote tensors server.
@@ -73,6 +74,8 @@ def remote_generate(
         payload["vae"] = vae
     if lora_name:
         payload["lora_name"] = lora_name
+    if guidance is not None:
+        payload["guidance"] = guidance
 
     try:
         with _build_client(base_url) as client:

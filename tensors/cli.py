@@ -758,6 +758,14 @@ def generate(  # noqa: PLR0915
     height: Annotated[int | None, typer.Option("-H", "--height", help="Image height (auto from checkpoint)")] = None,
     steps: Annotated[int | None, typer.Option("--steps", help="Sampling steps (auto from checkpoint)")] = None,
     cfg: Annotated[float | None, typer.Option("--cfg", help="CFG scale (auto from checkpoint)")] = None,
+    guidance: Annotated[
+        float | None,
+        typer.Option(
+            "--guidance",
+            "-g",
+            help="FluxGuidance value (Flux only; default 3.5). Ignored for non-Flux models.",
+        ),
+    ] = None,
     seed: Annotated[int, typer.Option("--seed", "-s", help="Random seed (-1 for random)")] = -1,
     sampler: Annotated[str | None, typer.Option("--sampler", help="Sampler name (auto from checkpoint)")] = None,
     scheduler: Annotated[str | None, typer.Option("--scheduler", help="Scheduler name (auto from checkpoint)")] = None,
@@ -1032,6 +1040,7 @@ def generate(  # noqa: PLR0915
             vae=vae,
             lora_name=lora,
             lora_strength=lora_strength,
+            guidance=guidance,
             console=console,
         )
 
@@ -1090,6 +1099,7 @@ def generate(  # noqa: PLR0915
             batch_size=count,
             vae=vae,
             orientation=orientation,
+            guidance=guidance,
         )
 
         if not result_local:

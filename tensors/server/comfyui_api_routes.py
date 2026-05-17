@@ -49,6 +49,12 @@ class GenerateRequest(PydanticBaseModel):
     vae: str | None = Field(default=None, description="VAE model name (defaults to sdxl_vae.safetensors)")
     lora_name: str | None = Field(default=None, description="LoRA model filename")
     lora_strength: float = Field(default=0.8, ge=0.0, le=2.0, description="LoRA strength")
+    guidance: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=30.0,
+        description="FluxGuidance value (Flux models only; default 3.5). Ignored for non-Flux models.",
+    )
 
 
 class GenerateResponse(PydanticBaseModel):
@@ -303,6 +309,7 @@ def comfyui_generate(request: GenerateRequest) -> dict[str, Any]:
         vae=vae,
         lora_name=request.lora_name,
         lora_strength=request.lora_strength,
+        guidance=request.guidance,
     )
 
     if not result:
