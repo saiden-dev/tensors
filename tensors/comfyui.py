@@ -235,6 +235,7 @@ def get_loaded_models(url: str | None = None, console: Console | None = None) ->
         # Model type to node class and input name mapping
         model_types = {
             "checkpoints": ("CheckpointLoaderSimple", "ckpt_name"),
+            "diffusion_models": ("UNETLoader", "unet_name"),
             "loras": ("LoraLoader", "lora_name"),
             "vae": ("VAELoader", "vae_name"),
             "clip": ("CLIPLoader", "clip_name"),

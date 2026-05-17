@@ -926,6 +926,66 @@ def generate(  # noqa: PLR0915
     )
 
 
+# Map model family → which ComfyUI loader directory the checkpoint must live in.
+# Used by _validate_model_available() to query the right slot from get_loaded_models().
+_FAMILY_TO_LOADER_BUCKET: dict[str, str] = {
+    "flux_unet": "diffusion_models",
+    "flux2_klein": "diffusion_models",
+}
+
+
+def _validate_model_available(model: str, family: str | None, lora: str | None) -> None:
+    """Verify model + LoRA exist on the live ComfyUI host before queueing.
+
+    Fails fast with typer.Exit(1) and a "did you mean" suggestion when the
+    requested file isn't loaded. Bucket lookup respects family:
+    - flux_unet / flux2_klein → diffusion_models/ (UNETLoader)
+    - everything else → checkpoints/ (CheckpointLoaderSimple)
+
+    Network failures are non-fatal — we'd rather forward to ComfyUI and let its
+    400 surface than block on a stale comfyui endpoint.
+    """
+    from difflib import get_close_matches  # noqa: PLC0415
+
+    from tensors.comfyui import get_loaded_models  # noqa: PLC0415
+
+    try:
+        loaded = get_loaded_models(console=None)
+    except Exception:
+        return  # network down — let ComfyUI itself handle it
+    if not loaded:
+        return
+
+    bucket = _FAMILY_TO_LOADER_BUCKET.get(family or "", "checkpoints")
+    available = loaded.get(bucket, [])
+    if model not in available:
+        console.print(f"[red]Model '{model}' not available on ComfyUI host[/red]")
+        console.print(f"[dim](looked in {bucket}/ — {len(available)} entries)[/dim]")
+        matches = get_close_matches(model, available, n=3, cutoff=0.5)
+        if matches:
+            console.print("[yellow]Did you mean:[/yellow]")
+            for m in matches:
+                console.print(f"  [cyan]{m}[/cyan]")
+        else:
+            console.print(f"[dim]Run `tsr models` to see what's installed in {bucket}/.[/dim]")
+        # Suggest symlink fix if the file exists in checkpoints/ but family wants diffusion_models/
+        if bucket == "diffusion_models" and model in loaded.get("checkpoints", []):
+            console.print(
+                f"[yellow]Hint:[/yellow] '{model}' is in checkpoints/ but UNet-only checkpoints need to be in diffusion_models/. "
+                f"On the ComfyUI host: [cyan]ln -s ../checkpoints/{model} <comfyui>/models/diffusion_models/{model}[/cyan]"
+            )
+        raise typer.Exit(1)
+
+    if lora and lora not in loaded.get("loras", []):
+        console.print(f"[red]LoRA '{lora}' not available on ComfyUI host[/red]")
+        matches = get_close_matches(lora, loaded.get("loras", []), n=3, cutoff=0.5)
+        if matches:
+            console.print("[yellow]Did you mean:[/yellow]")
+            for m in matches:
+                console.print(f"  [cyan]{m}[/cyan]")
+        raise typer.Exit(1)
+
+
 def _run_generation(  # noqa: PLR0915
     *,
     prompt: str,
@@ -982,6 +1042,14 @@ def _run_generation(  # noqa: PLR0915
                     console.print(f"[dim]Model family: {model_family} (override)[/dim]")
                 else:
                     console.print(f"[dim]Detected model family: {model_family}[/dim]")
+
+    # ---- Validate the requested model exists on the target host ----
+    # Catches mismatches between local intent ("v5Hardcore") and what's actually
+    # available remotely ("v11Softcore"), and offers a fuzzy "did you mean" hint
+    # instead of forwarding the request to ComfyUI for a generic 400 rejection.
+    # Skipped in --json mode and for remote dispatches (server already validates).
+    if model and not json_output and not remote:
+        _validate_model_available(model, model_family, lora)
 
     # Build enhanced prompt with quality prefix and LoRA trigger words
     prompt_parts: list[str] = []
