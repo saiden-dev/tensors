@@ -788,7 +788,7 @@ def generate(  # noqa: PLR0915
             help=(
                 "Override detected model family "
                 "(pony, illustrious, sdxl, sdxl_lightning, sdxl_turbo, "
-                "sd15, sd15_lcm, flux, flux_schnell, zimage)"
+                "sd15, sd15_lcm, flux, flux_schnell, flux_unet, zimage)"
             ),
         ),
     ] = None,

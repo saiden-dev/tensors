@@ -320,6 +320,73 @@ class TestModelFamilyDetection:
         assert detect_model_family("model.safetensors", "Flux.1 D") == "flux"
         assert detect_model_family("model.safetensors", "Flux.1 S schnell") == "flux_schnell"
 
+    def test_detect_flux_unet_lust(self) -> None:
+        """lust_*.safetensors → flux_unet (no 'flux' in name, custom pattern)."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("lust_v10.safetensors") == "flux_unet"
+        assert detect_model_family("LUST_v10.safetensors") == "flux_unet"
+
+    def test_detect_flux_unet_cyberrealistic(self) -> None:
+        """cyberrealisticFlux_*.safetensors → flux_unet (intercepts generic 'flux' match)."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("cyberrealisticFlux_v25.safetensors") == "flux_unet"
+
+    def test_detect_flux_unet_getphat(self) -> None:
+        """getphatFLUXReality_*.safetensors → flux_unet."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("getphatFLUXReality_v11Softcore.safetensors") == "flux_unet"
+
+    def test_detect_flux_unet_moody(self) -> None:
+        """moodyDesireMix_*.safetensors → flux_unet (no 'flux' in name)."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("moodyDesireMix_v20PRO.safetensors") == "flux_unet"
+
+    def test_detect_flux_unet_fcfluxpony(self) -> None:
+        """fcFluxPony*.safetensors → flux_unet (intercepts flux + fluxpony)."""
+        from tensors.config import detect_model_family
+
+        assert (
+            detect_model_family("fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors")
+            == "flux_unet"
+        )
+
+    def test_detect_flux_unet_overrides_base_model(self) -> None:
+        """Filename UNet-only pattern wins over a (likely wrong) CivitAI base_model tag."""
+        from tensors.config import detect_model_family
+
+        # Even if CivitAI claims "SDXL 1.0", the filename pattern wins.
+        assert detect_model_family("lust_v10.safetensors", "SDXL 1.0") == "flux_unet"
+        assert (
+            detect_model_family("cyberrealisticFlux_v25.safetensors", "Pony") == "flux_unet"
+        )
+
+    def test_flux_unet_family_defaults_has_external_clip(self) -> None:
+        """flux_unet preset advertises external_clip + clip filenames."""
+        from tensors.config import MODEL_FAMILY_DEFAULTS
+
+        defaults = MODEL_FAMILY_DEFAULTS["flux_unet"]
+        assert defaults["external_clip"] is True
+        assert defaults["clip_l"] == "clip_l.safetensors"
+        assert defaults["clip_t5"] == "t5xxl_fp16.safetensors"
+        # Sanity: same sampling profile as flux
+        assert defaults["cfg"] == 1.0
+        assert defaults["guidance"] == 3.5
+        assert defaults["vae"] == "ae.safetensors"
+
+    def test_get_model_generation_defaults_flux_unet(self) -> None:
+        """flux_unet model resolves to the flux_unet preset with external_clip set."""
+        from tensors.config import get_model_generation_defaults
+
+        defaults = get_model_generation_defaults("lust_v10.safetensors")
+        assert defaults["family"] == "flux_unet"
+        assert defaults["external_clip"] is True
+        assert defaults["sampler"] == "euler"
+        assert defaults["scheduler"] == "simple"
+
     def test_detect_sdxl_variants(self) -> None:
         """Test detecting SDXL family variants."""
         from tensors.config import detect_model_family
@@ -531,6 +598,104 @@ class TestFluxWorkflowBuilder:
         # Flux-specific nodes must NOT be present
         assert "140" not in wf
         assert "120" not in wf
+
+
+class TestFluxUnetWorkflowBuilder:
+    """Tests for the UNet-only Flux workflow (split CLIP/T5/VAE loaders)."""
+
+    def test_build_workflow_flux_unet_uses_dual_clip_loader(self) -> None:
+        """flux_unet checkpoints emit UNETLoader + DualCLIPLoader + VAELoader and NO CheckpointLoaderSimple."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(prompt="a cat", model="lust_v10.safetensors")
+
+        # Three split loaders at the canonical IDs
+        assert wf["100"]["class_type"] == "UNETLoader"
+        assert wf["101"]["class_type"] == "DualCLIPLoader"
+        assert wf["102"]["class_type"] == "VAELoader"
+
+        # The combined checkpoint loader must NOT appear anywhere.
+        for node in wf.values():
+            assert node["class_type"] != "CheckpointLoaderSimple"
+
+        # UNet filename plumbed through
+        assert wf["100"]["inputs"]["unet_name"] == "lust_v10.safetensors"
+
+        # DualCLIPLoader configured for flux with both encoders
+        clip_inputs = wf["101"]["inputs"]
+        assert clip_inputs["clip_name1"] == "clip_l.safetensors"
+        assert clip_inputs["clip_name2"] == "t5xxl_fp16.safetensors"
+        assert clip_inputs["type"] == "flux"
+
+        # VAE defaults to ae.safetensors
+        assert wf["102"]["inputs"]["vae_name"] == "ae.safetensors"
+
+        # Downstream wiring: CLIPTextEncode reads from DualCLIPLoader, VAEDecode from VAELoader
+        assert wf["130"]["inputs"]["clip"] == ["101", 0]
+        assert wf["131"]["inputs"]["clip"] == ["101", 0]
+        assert wf["170"]["inputs"]["vae"] == ["102", 0]
+        # ModelSamplingFlux still reads MODEL from node 100 (now UNETLoader)
+        assert wf["120"]["inputs"]["model"] == ["100", 0]
+
+    def test_flux_unet_inherits_flux_sampling_profile(self) -> None:
+        """flux_unet locks KSampler.cfg to 1.0 and exposes the FluxGuidance dial."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(
+            prompt="a cat", model="lust_v10.safetensors", cfg=7.5
+        )
+        assert wf["160"]["inputs"]["cfg"] == 1.0
+        # The caller's cfg=7.5 should re-route to FluxGuidance (same precedence as plain flux)
+        assert wf["140"]["inputs"]["guidance"] == 7.5
+
+    def test_flux_unet_lora_injection_wires_split_loaders(self) -> None:
+        """LoRA on flux_unet injects node 110 reading MODEL from UNETLoader and CLIP from DualCLIPLoader."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(
+            prompt="a cat",
+            model="lust_v10.safetensors",
+            lora_name="my_style.safetensors",
+            lora_strength=0.6,
+        )
+        assert wf["110"]["class_type"] == "LoraLoader"
+        assert wf["110"]["inputs"]["lora_name"] == "my_style.safetensors"
+        assert wf["110"]["inputs"]["strength_model"] == 0.6
+        # LoRA reads model from UNETLoader, clip from DualCLIPLoader
+        assert wf["110"]["inputs"]["model"] == ["100", 0]
+        assert wf["110"]["inputs"]["clip"] == ["101", 0]
+        # Downstream consumers now read from the LoRA outputs
+        assert wf["120"]["inputs"]["model"] == ["110", 0]
+        assert wf["130"]["inputs"]["clip"] == ["110", 1]
+        assert wf["131"]["inputs"]["clip"] == ["110", 1]
+
+    def test_flux_unet_external_vae_overrides_default(self) -> None:
+        """Caller-provided VAE replaces ae.safetensors on the VAELoader (no new node)."""
+        from tensors.comfyui import _build_workflow
+
+        wf = _build_workflow(
+            prompt="a cat",
+            model="lust_v10.safetensors",
+            vae="other_vae.safetensors",
+        )
+        assert wf["102"]["inputs"]["vae_name"] == "other_vae.safetensors"
+        # And VAEDecode still wires through node 102 — no shadow node 171.
+        assert wf["170"]["inputs"]["vae"] == ["102", 0]
+        assert "171" not in wf
+
+    def test_flux_unet_via_explicit_family_override(self) -> None:
+        """A non-pattern filename still gets the UNet workflow when -F flux_unet is forced.
+
+        We can't pass --family directly to _build_workflow (it auto-detects from
+        the filename), but a checkpoint matching a UNet-only pattern proves the
+        family→workflow dispatch end-to-end.
+        """
+        from tensors.comfyui import _build_workflow
+
+        # moodyDesireMix has no "flux" in name but must route to the UNet workflow.
+        wf = _build_workflow(prompt="a cat", model="moodyDesireMix_v20PRO.safetensors")
+        assert wf["100"]["class_type"] == "UNETLoader"
+        assert wf["101"]["class_type"] == "DualCLIPLoader"
 
 
 class TestDisplayFormatters:

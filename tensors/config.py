@@ -671,6 +671,27 @@ MODEL_FAMILY_DEFAULTS: dict[str, dict[str, Any]] = {
         "steps": 4,
         "vae": "ae.safetensors",
     },
+    # UNet-only Flux checkpoints — same architecture as "flux" but the file
+    # ships without CLIP/T5/VAE baked in. Workflow must load them externally
+    # via UNETLoader + DualCLIPLoader + VAELoader instead of CheckpointLoaderSimple.
+    # external_clip=True signals this to the workflow builder.
+    "flux_unet": {
+        "quality_prefix": "",
+        "negative_prompt": "",
+        "width": 1024,
+        "height": 1024,
+        "portrait": (832, 1216),
+        "landscape": (1216, 832),
+        "cfg": 1.0,
+        "guidance": 3.5,
+        "sampler": "euler",
+        "scheduler": "simple",
+        "steps": 20,
+        "vae": "ae.safetensors",
+        "external_clip": True,
+        "clip_l": "clip_l.safetensors",
+        "clip_t5": "t5xxl_fp16.safetensors",
+    },
     "zimage": {
         "quality_prefix": "",
         "negative_prompt": "",
@@ -687,6 +708,28 @@ MODEL_FAMILY_DEFAULTS: dict[str, dict[str, Any]] = {
 }
 
 
+# UNet-only Flux checkpoint filename substrings (case-insensitive). These ship
+# without baked-in CLIP/T5/VAE, so they require UNETLoader + DualCLIPLoader +
+# VAELoader instead of CheckpointLoaderSimple. Matched on the lowercased
+# filename via simple substring containment.
+#
+# Add new patterns here as we encounter them — order doesn't matter, first
+# match wins.
+FLUX_UNET_ONLY_PATTERNS: tuple[str, ...] = (
+    "lust_",             # lust_v10.safetensors (Flux.2 Klein 9B-base)
+    # Note: bare "lust" would falsely match "illustrious" — keep the underscore.
+    "cyberrealisticflux",  # cyberrealisticFlux_v25.safetensors
+    "getphatflux",       # getphatFLUXReality_v11Softcore.safetensors
+    "moodydesire",       # moodyDesireMix_v20PRO.safetensors
+    "fcfluxpony",        # fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors
+)
+
+
+def _is_flux_unet_only(name_lower: str) -> bool:
+    """True if the lowercased filename matches a known UNet-only Flux pattern."""
+    return any(p in name_lower for p in FLUX_UNET_ONLY_PATTERNS)
+
+
 def detect_model_family(model_name: str, base_model: str | None = None) -> str | None:  # noqa: PLR0911
     """Detect model family from filename or CivitAI base_model field.
 
@@ -696,10 +739,17 @@ def detect_model_family(model_name: str, base_model: str | None = None) -> str |
 
     Returns:
         Model family key (pony, illustrious, sdxl, sdxl_lightning, sdxl_turbo,
-        sd15, sd15_lcm, flux, flux_schnell, zimage) or None if unknown
+        sd15, sd15_lcm, flux, flux_schnell, flux_unet, zimage) or None if unknown
     """
     name_lower = model_name.lower()
     base_lower = (base_model or "").lower()
+
+    # UNet-only Flux override: must run BEFORE the generic flux check below,
+    # since some patterns ("cyberrealisticflux", "getphatflux", "fcfluxpony")
+    # also contain the substring "flux". Filename wins over base_model
+    # field — these checkpoints are often mis-tagged on CivitAI.
+    if _is_flux_unet_only(name_lower):
+        return "flux_unet"
 
     # Architecture override: filename containing "flux" wins over any base_model
     # field (handles hybrid models like "FluxPony" that CivitAI tags as "Pony"

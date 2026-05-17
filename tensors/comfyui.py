@@ -742,6 +742,94 @@ FLUX_WORKFLOW_TEMPLATE: dict[str, Any] = {
 }
 
 
+# Flux UNet-only workflow template.
+#
+# Used for checkpoints that ship without CLIP/T5/VAE baked in (e.g. Flux Dev's
+# split-file release, lust_v10, cyberrealisticFlux, getphatFLUXReality,
+# moodyDesireMix, fcFluxPony*). Structurally identical to FLUX_WORKFLOW_TEMPLATE
+# but the single CheckpointLoaderSimple (node "100") is replaced by three
+# separate loaders that share the same node IDs the rest of the graph already
+# expects:
+#
+#   "100" UNETLoader      → outputs MODEL (slot 0)
+#   "101" DualCLIPLoader  → outputs CLIP  (slot 0)
+#   "102" VAELoader       → outputs VAE   (slot 0)
+#
+# Downstream nodes that referenced ["100", 1] (clip) now read ["101", 0];
+# downstream nodes that referenced ["100", 2] (vae) now read ["102", 0].
+FLUX_UNET_WORKFLOW_TEMPLATE: dict[str, Any] = {
+    "100": {
+        "class_type": "UNETLoader",
+        "inputs": {"unet_name": "", "weight_dtype": "default"},
+    },
+    "101": {
+        "class_type": "DualCLIPLoader",
+        "inputs": {
+            "clip_name1": "clip_l.safetensors",
+            "clip_name2": "t5xxl_fp16.safetensors",
+            "type": "flux",
+        },
+    },
+    "102": {
+        "class_type": "VAELoader",
+        "inputs": {"vae_name": "ae.safetensors"},
+    },
+    "120": {
+        "class_type": "ModelSamplingFlux",
+        "inputs": {
+            "model": ["100", 0],
+            "max_shift": 1.15,
+            "base_shift": 0.5,
+            "width": 1024,
+            "height": 1024,
+        },
+    },
+    "130": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["101", 0]},
+    },
+    "131": {
+        "class_type": "CLIPTextEncode",
+        "inputs": {"text": "", "clip": ["101", 0]},
+    },
+    "132": {
+        "class_type": "ConditioningZeroOut",
+        "inputs": {"conditioning": ["131", 0]},
+    },
+    "140": {
+        "class_type": "FluxGuidance",
+        "inputs": {"conditioning": ["130", 0], "guidance": 3.5},
+    },
+    "150": {
+        "class_type": "EmptySD3LatentImage",
+        "inputs": {"width": 1024, "height": 1024, "batch_size": 1},
+    },
+    "160": {
+        "class_type": "KSampler",
+        "inputs": {
+            "seed": 0,
+            "steps": 20,
+            "cfg": 1.0,
+            "sampler_name": "euler",
+            "scheduler": "simple",
+            "denoise": 1.0,
+            "model": ["120", 0],
+            "positive": ["140", 0],
+            "negative": ["132", 0],
+            "latent_image": ["150", 0],
+        },
+    },
+    "170": {
+        "class_type": "VAEDecode",
+        "inputs": {"samples": ["160", 0], "vae": ["102", 0]},
+    },
+    "180": {
+        "class_type": "SaveImage",
+        "inputs": {"filename_prefix": "flux", "images": ["170", 0]},
+    },
+}
+
+
 # Default SDXL/Illustrious/Pony compatible workflow template
 # Uses separate VAE loader for better quality with modern models
 DEFAULT_WORKFLOW_TEMPLATE: dict[str, Any] = {
@@ -887,6 +975,87 @@ def _build_flux_workflow(
     return workflow
 
 
+def _build_flux_unet_workflow(
+    prompt: str,
+    model: str | None,
+    seed: int,
+    steps: int,
+    sampler: str,
+    scheduler: str,
+    width: int,
+    height: int,
+    batch_size: int,
+    lora_name: str | None,
+    lora_strength: float,
+    vae: str | None,
+    guidance: float,
+    clip_l: str,
+    clip_t5: str,
+) -> dict[str, Any]:
+    """Build a Flux workflow for UNet-only checkpoints (split CLIP/T5/VAE).
+
+    Structurally identical to ``_build_flux_workflow`` but uses UNETLoader +
+    DualCLIPLoader + VAELoader (nodes 100/101/102) instead of a single
+    CheckpointLoaderSimple. The rest of the graph (ModelSamplingFlux, KSampler,
+    FluxGuidance, etc.) is unchanged.
+    """
+    workflow = copy.deepcopy(FLUX_UNET_WORKFLOW_TEMPLATE)
+
+    # Seed (random if -1)
+    actual_seed = seed if seed >= 0 else random.randint(0, 2**32 - 1)
+
+    # UNet checkpoint
+    if model:
+        workflow["100"]["inputs"]["unet_name"] = model
+
+    # CLIP/T5 (configurable so future variants can swap fp16 → fp8, etc.)
+    workflow["101"]["inputs"]["clip_name1"] = clip_l
+    workflow["101"]["inputs"]["clip_name2"] = clip_t5
+
+    # External VAE — fall back to ae.safetensors from the template if unset
+    if vae:
+        workflow["102"]["inputs"]["vae_name"] = vae
+
+    # ModelSamplingFlux must match the latent dimensions
+    workflow["120"]["inputs"]["width"] = width
+    workflow["120"]["inputs"]["height"] = height
+
+    # Prompts (positive only — negative is zero'd via ConditioningZeroOut)
+    workflow["130"]["inputs"]["text"] = prompt
+
+    # FluxGuidance carries the real prompt-adherence dial
+    workflow["140"]["inputs"]["guidance"] = guidance
+
+    # Latent
+    workflow["150"]["inputs"]["width"] = width
+    workflow["150"]["inputs"]["height"] = height
+    workflow["150"]["inputs"]["batch_size"] = batch_size
+
+    # KSampler — cfg stays 1.0
+    workflow["160"]["inputs"]["seed"] = actual_seed
+    workflow["160"]["inputs"]["steps"] = steps
+    workflow["160"]["inputs"]["sampler_name"] = sampler
+    workflow["160"]["inputs"]["scheduler"] = scheduler
+
+    # Optional LoRA injected between UNet/CLIP loaders and downstream consumers
+    if lora_name:
+        workflow["110"] = {
+            "class_type": "LoraLoader",
+            "inputs": {
+                "model": ["100", 0],
+                "clip": ["101", 0],
+                "lora_name": lora_name,
+                "strength_model": lora_strength,
+                "strength_clip": lora_strength,
+            },
+        }
+        workflow["120"]["inputs"]["model"] = ["110", 0]
+        workflow["130"]["inputs"]["clip"] = ["110", 1]
+        workflow["131"]["inputs"]["clip"] = ["110", 1]
+
+    return workflow
+
+
 def _build_workflow(
     prompt: str,
     negative_prompt: str = "",
@@ -972,6 +1141,28 @@ def _build_workflow(
             lora_strength=lora_strength,
             vae=resolved_vae,
             guidance=_resolve_flux_guidance(guidance, cfg, defaults),
+        )
+
+    # UNet-only Flux checkpoints (no baked-in CLIP/T5/VAE): use the split-loader
+    # variant. Triggered by family="flux_unet" — also covers any family whose
+    # preset opts in via external_clip=True.
+    if family == "flux_unet" or defaults.get("external_clip"):
+        return _build_flux_unet_workflow(
+            prompt=prompt,
+            model=model,
+            seed=seed,
+            steps=resolved_steps,
+            sampler=resolved_sampler,
+            scheduler=resolved_scheduler,
+            width=resolved_width,
+            height=resolved_height,
+            batch_size=batch_size,
+            lora_name=lora_name,
+            lora_strength=lora_strength,
+            vae=resolved_vae,
+            guidance=_resolve_flux_guidance(guidance, cfg, defaults),
+            clip_l=defaults.get("clip_l", "clip_l.safetensors"),
+            clip_t5=defaults.get("clip_t5", "t5xxl_fp16.safetensors"),
         )
 
     workflow = copy.deepcopy(DEFAULT_WORKFLOW_TEMPLATE)
