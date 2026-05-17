@@ -813,8 +813,6 @@ def generate(  # noqa: PLR0915
         tsr generate --input '{"prompt": "a mech", "model": "flux1-dev-fp8.safetensors"}'
         tsr generate "raw prompt" --no-quality --no-negative
     """
-    import random as rng  # noqa: PLC0415
-
     # ---- JSON input merging ----
     if json_input is not None:
         # Support file paths and raw JSON strings
@@ -900,6 +898,66 @@ def generate(  # noqa: PLR0915
     if not prompt:
         console.print("[red]Prompt is required (as argument or in --input JSON)[/red]")
         raise typer.Exit(1)
+
+    _run_generation(
+        prompt=prompt,
+        model=model,
+        width=width,
+        height=height,
+        steps=steps,
+        cfg=cfg,
+        guidance=guidance,
+        seed=seed,
+        sampler=sampler,
+        scheduler=scheduler,
+        vae=vae,
+        orientation=orientation,
+        lora=lora,
+        lora_strength=lora_strength,
+        negative=negative,
+        count=count,
+        rating=rating,
+        no_quality=no_quality,
+        no_negative=no_negative,
+        family=family,
+        output=output,
+        remote=remote,
+        json_output=json_output,
+    )
+
+
+def _run_generation(  # noqa: PLR0915
+    *,
+    prompt: str,
+    model: str | None = None,
+    width: int | None = None,
+    height: int | None = None,
+    steps: int | None = None,
+    cfg: float | None = None,
+    guidance: float | None = None,
+    seed: int = -1,
+    sampler: str | None = None,
+    scheduler: str | None = None,
+    vae: str | None = None,
+    orientation: str = "square",
+    lora: str | None = None,
+    lora_strength: float = 0.8,
+    negative: str = "",
+    count: int = 1,
+    rating: str | None = None,
+    no_quality: bool = False,
+    no_negative: bool = False,
+    family: str | None = None,
+    output: Path | None = None,
+    remote: str | None = None,
+    json_output: bool = False,
+) -> None:
+    """Core generation routine shared by `generate` and `style-sweep`.
+
+    All parameters are fully resolved (no CLI/JSON merging here). Raises typer.Exit
+    on failure. Prints to console unless json_output is True (then prints JSON).
+    """
+    import random as rng  # noqa: PLC0415
 
     # ---- Detect model family and enhance prompt/negative ----
     family_defaults: dict[str, Any] = {}
