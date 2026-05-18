@@ -2922,9 +2922,7 @@ app.add_typer(templates_app)
 @templates_app.command("extract")
 def templates_extract(
     model: Annotated[str, typer.Argument(help="Local model name (e.g. lust_v10.safetensors)")],
-    orientation: Annotated[
-        str, typer.Option("-O", "--orientation", help="Resolution: square, portrait, landscape")
-    ] = "portrait",
+    orientation: Annotated[str, typer.Option("-O", "--orientation", help="Resolution: square, portrait, landscape")] = "portrait",
     no_overrides: Annotated[
         bool,
         typer.Option(
@@ -2933,25 +2931,17 @@ def templates_extract(
         ),
     ] = False,
     api_key: Annotated[str | None, typer.Option("--api-key", help="CivitAI API key")] = None,
-    limit: Annotated[
-        int, typer.Option("--limit", "-L", help="Max templates to write (0 = all unique prompts)")
-    ] = 0,
-    overwrite: Annotated[
-        bool, typer.Option("--overwrite", help="Overwrite existing template files (default: skip)")
-    ] = False,
+    limit: Annotated[int, typer.Option("--limit", "-L", help="Max templates to write (0 = all unique prompts)")] = 0,
+    overwrite: Annotated[bool, typer.Option("--overwrite", help="Overwrite existing template files (default: skip)")] = False,
     do_generate: Annotated[
         bool,
         typer.Option("--generate", help="After writing, run `tsr generate --input` for each emitted template"),
     ] = False,
     output_dir: Annotated[
         Path | None,
-        typer.Option(
-            "--output-dir", help="Where to write generated images when --generate (default: ComfyUI output dir)"
-        ),
+        typer.Option("--output-dir", help="Where to write generated images when --generate (default: ComfyUI output dir)"),
     ] = None,
-    dry_run: Annotated[
-        bool, typer.Option("--dry-run", help="Print what would be done; write nothing")
-    ] = False,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="Print what would be done; write nothing")] = False,
 ) -> None:
     """Bulk-extract templates from a model's CivitAI showcase.
 
@@ -3113,9 +3103,7 @@ def templates_list(
 
     items = list_templates(model)
     if json_output:
-        console.print_json(
-            data={"dir": str(TEMPLATES_DIR), "templates": [{"model": m, "name": n} for m, n in items]}
-        )
+        console.print_json(data={"dir": str(TEMPLATES_DIR), "templates": [{"model": m, "name": n} for m, n in items]})
         return
     if not items:
         scope = f" for model '{model}'" if model else ""
