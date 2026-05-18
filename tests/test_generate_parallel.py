@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
@@ -258,9 +257,7 @@ def test_parallel_queue_from_yaml_input(tmp_path: Path, calls: list[dict[str, An
     """parallel_queue can be set via --input YAML (mirrors other generate params)."""
     out = tmp_path / "img.png"
     yml = tmp_path / "spec.yml"
-    yml.write_text(
-        f'prompt: from-yaml\nmodel: x.safetensors\ncount: 3\nparallel_queue: 3\nseed: 7\noutput: "{out}"\n'
-    )
+    yml.write_text(f'prompt: from-yaml\nmodel: x.safetensors\ncount: 3\nparallel_queue: 3\nseed: 7\noutput: "{out}"\n')
     result = runner.invoke(app, ["generate", "--input", str(yml)])
     assert result.exit_code == 0, result.output
     assert len(calls) == 3
@@ -271,9 +268,7 @@ def test_cli_parallel_queue_overrides_yaml(tmp_path: Path, calls: list[dict[str,
     """CLI --parallel-queue wins over YAML's parallel_queue (standard precedence)."""
     out = tmp_path / "img.png"
     yml = tmp_path / "spec.yml"
-    yml.write_text(
-        f'prompt: from-yaml\nmodel: x.safetensors\ncount: 2\nparallel_queue: 1\nseed: 10\noutput: "{out}"\n'
-    )
+    yml.write_text(f'prompt: from-yaml\nmodel: x.safetensors\ncount: 2\nparallel_queue: 1\nseed: 10\noutput: "{out}"\n')
     # YAML says P=1 (sequential), CLI overrides to P=2 (fanout)
     result = runner.invoke(app, ["generate", "--input", str(yml), "-P", "2"])
     assert result.exit_code == 0, result.output
