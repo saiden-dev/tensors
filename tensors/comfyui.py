@@ -30,6 +30,58 @@ def _get_comfyui_url() -> str:
     return get_comfyui_url()
 
 
+# Map ComfyUI validation input_name → CLI override flag that would fix it.
+# When a node fails value_not_in_list validation we hint at the appropriate
+# escape hatch instead of just dumping the raw error dict.
+_INPUT_HINT_FLAGS: dict[str, str] = {
+    "vae_name": "--vae <name>  (or --family <key> to switch workflow family)",
+    "ckpt_name": "--model <name>",
+    "unet_name": "--model <name>  (UNet-only flux; check filename)",
+    "clip_name1": "--family <key>  (CLIP/T5 file missing for chosen family)",
+    "clip_name2": "--family <key>  (CLIP/T5 file missing for chosen family)",
+    "lora_name": "--lora <name>",
+}
+
+
+def _print_validation_hint(console: Console, node_errors: dict[str, Any]) -> None:
+    """Surface actionable hints for ComfyUI value_not_in_list errors.
+
+    Parses node_errors from a prompt validation failure and, for each
+    `value_not_in_list` entry on a known input (vae_name, ckpt_name, etc),
+    prints the received value, a truncated list of valid choices, and the
+    CLI flag that would override the selection. Falls back to the raw
+    error dump when nothing actionable is recognized.
+    """
+    actionable = False
+    for node_id, payload in node_errors.items():
+        if not isinstance(payload, dict):
+            continue
+        class_type = payload.get("class_type", "?")
+        for err in payload.get("errors", []) or []:
+            if err.get("type") != "value_not_in_list":
+                continue
+            extra = err.get("extra_info") or {}
+            input_name = extra.get("input_name", "?")
+            received = extra.get("received_value", "?")
+            valid_list = (extra.get("input_config") or [[]])[0]
+            valid_preview = ", ".join(str(v) for v in valid_list[:8])
+            if len(valid_list) > 8:
+                valid_preview += f", … (+{len(valid_list) - 8} more)"
+            hint = _INPUT_HINT_FLAGS.get(input_name)
+            console.print(
+                f"  [yellow]Node {node_id} ({class_type}):[/yellow] "
+                f"[red]{input_name}={received!r} not available on this backend[/red]"
+            )
+            console.print(f"    available: [dim]{valid_preview}[/dim]")
+            if hint:
+                console.print(f"    [cyan]hint:[/cyan] retry with [bold]{hint}[/bold]")
+            actionable = True
+    if not actionable:
+        # Fall back to the raw dump so we never hide errors entirely.
+        for node_id, payload in node_errors.items():
+            console.print(f"  [yellow]Node {node_id}:[/yellow] {payload}")
+
+
 # ============================================================================
 # Data Classes
 # ============================================================================
@@ -364,8 +416,7 @@ def queue_prompt(
             if console:
                 console.print(f"[red]Workflow error: {result['error']}[/red]")
                 if "node_errors" in result:
-                    for node_id, errors in result["node_errors"].items():
-                        console.print(f"  [yellow]Node {node_id}:[/yellow] {errors}")
+                    _print_validation_hint(console, result["node_errors"])
             return None
 
         return result
@@ -377,8 +428,7 @@ def queue_prompt(
                 if "error" in error_detail:
                     console.print(f"  [yellow]{error_detail['error']}[/yellow]")
                 if "node_errors" in error_detail:
-                    for node_id, errors in error_detail["node_errors"].items():
-                        console.print(f"  [yellow]Node {node_id}:[/yellow] {errors}")
+                    _print_validation_hint(console, error_detail["node_errors"])
             except Exception:
                 pass
         return None

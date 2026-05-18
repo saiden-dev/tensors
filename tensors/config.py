@@ -745,12 +745,33 @@ FLUX_UNET_ONLY_PATTERNS: tuple[str, ...] = (
     "getphatflux",  # getphatFLUXReality_v11Softcore.safetensors
     "moodydesire",  # moodyDesireMix_v20PRO.safetensors
     "fcfluxpony",  # fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors
+    "prototype_",  # prototype_v10.safetensors (Flux unet-only, no "flux" in name)
 )
 
 
 def _is_flux_unet_only(name_lower: str) -> bool:
     """True if the lowercased filename matches a known UNet-only Flux pattern."""
     return any(p in name_lower for p in FLUX_UNET_ONLY_PATTERNS)
+
+
+# All-in-one Flux checkpoint filename substrings (case-insensitive). These
+# checkpoints bundle UNet + CLIP-L + T5 + VAE in a single file (loadable via
+# CheckpointLoaderSimple), but their filename does NOT contain "flux" so the
+# generic substring check misses them and they fall through to SDXL defaults
+# (which fails when the SDXL VAE isn't installed on the target backend).
+#
+# Detect via header inspection: keys like `model.diffusion_model.double_blocks.*`
+# plus bundled `text_encoders.*` and `vae.*` prefixes indicate FLUX all-in-one.
+# Add new patterns here as we encounter them.
+FLUX_ALL_IN_ONE_PATTERNS: tuple[str, ...] = (
+    "ultrasense",  # ultrasenseInfinity_v10.safetensors
+    "bodyslider",  # bodySliderFitness_v10.safetensors
+)
+
+
+def _is_flux_all_in_one(name_lower: str) -> bool:
+    """True if the lowercased filename matches a known all-in-one Flux pattern."""
+    return any(p in name_lower for p in FLUX_ALL_IN_ONE_PATTERNS)
 
 
 # Flux.2 Klein 9B filename substrings (case-insensitive). These checkpoints are
@@ -803,6 +824,14 @@ def detect_model_family(model_name: str, base_model: str | None = None) -> str |
     # field — these checkpoints are often mis-tagged on CivitAI.
     if _is_flux_unet_only(name_lower):
         return "flux_unet"
+
+    # All-in-one Flux override for checkpoints whose filename omits "flux"
+    # (e.g. "ultrasenseInfinity_v10.safetensors"). Without this they fall
+    # through to the SDXL default at the bottom of this function and the
+    # generated workflow asks ComfyUI for sdxl_vae.safetensors — which fails
+    # on Flux-only backends like sin.
+    if _is_flux_all_in_one(name_lower):
+        return "flux"
 
     # Architecture override: filename containing "flux" wins over any base_model
     # field (handles hybrid models like "FluxPony" that CivitAI tags as "Pony"

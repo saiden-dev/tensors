@@ -360,6 +360,46 @@ class TestModelFamilyDetection:
 
         assert detect_model_family("fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors") == "flux_unet"
 
+    def test_detect_flux_unet_prototype(self) -> None:
+        """prototype_*.safetensors → flux_unet (no 'flux' in name, header confirms UNet-only Flux)."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("prototype_v10.safetensors") == "flux_unet"
+        assert detect_model_family("PROTOTYPE_v11.safetensors") == "flux_unet"
+
+    def test_detect_flux_all_in_one_ultrasense(self) -> None:
+        """ultrasenseInfinity_*.safetensors → flux (all-in-one checkpoint, no 'flux' in name)."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("ultrasenseInfinity_v10.safetensors") == "flux"
+        assert detect_model_family("UltrasenseInfinity_v20.safetensors") == "flux"
+
+    def test_detect_flux_all_in_one_bodyslider(self) -> None:
+        """bodySliderFitness_*.safetensors → flux (all-in-one checkpoint, no 'flux' in name)."""
+        from tensors.config import detect_model_family
+
+        assert detect_model_family("bodySliderFitness_v10.safetensors") == "flux"
+
+    def test_detect_flux_all_in_one_overrides_base_model(self) -> None:
+        """All-in-one Flux filename wins over (likely wrong) CivitAI base_model tag."""
+        from tensors.config import detect_model_family
+
+        # If CivitAI mis-tags an all-in-one Flux checkpoint as SDXL the filename
+        # pattern must still route it to the Flux workflow.
+        assert detect_model_family("ultrasenseInfinity_v10.safetensors", "SDXL 1.0") == "flux"
+        assert detect_model_family("bodySliderFitness_v10.safetensors", "Pony") == "flux"
+
+    def test_flux_all_in_one_uses_bundled_vae(self) -> None:
+        """All-in-one Flux defaults resolve to the flux preset (ae.safetensors VAE)."""
+        from tensors.config import get_model_generation_defaults
+
+        defaults = get_model_generation_defaults("ultrasenseInfinity_v10.safetensors")
+        assert defaults["family"] == "flux"
+        assert defaults["vae"] == "ae.safetensors"
+        # All-in-one flux does NOT advertise external_clip — workflow uses
+        # CheckpointLoaderSimple and pulls VAE/CLIP from the checkpoint itself.
+        assert defaults.get("external_clip") is not True
+
     def test_detect_flux_unet_overrides_base_model(self) -> None:
         """Filename UNet-only pattern wins over a (likely wrong) CivitAI base_model tag."""
         from tensors.config import detect_model_family
