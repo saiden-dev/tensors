@@ -160,14 +160,7 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 def test_generate_consumes_yaml_file(tmp_path: Path, captured: dict[str, Any]) -> None:
     """``tsr generate --input scene.yml`` plumbs YAML values through."""
     yml = tmp_path / "scene.yml"
-    yml.write_text(
-        "prompt: a sunset\n"
-        'model: "fluxmodel.safetensors"\n'
-        "steps: 28\n"
-        "scene:\n"
-        '  - "golden hour"\n'
-        '  - "wide angle"\n'
-    )
+    yml.write_text('prompt: a sunset\nmodel: "fluxmodel.safetensors"\nsteps: 28\nscene:\n  - "golden hour"\n  - "wide angle"\n')
     result = runner.invoke(app, ["generate", "--input", str(yml)])
     assert result.exit_code == 0, result.output
     assert captured["prompt"] == "a sunset"
