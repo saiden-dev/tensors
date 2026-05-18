@@ -12,6 +12,7 @@ dependencies = [
     "websocket-client>=1.9.0",
     "huggingface_hub>=0.25.0",
     "sqlmodel>=0.0.33",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -111,6 +112,10 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["websockets.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["yaml.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
