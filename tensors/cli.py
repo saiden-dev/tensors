@@ -874,6 +874,22 @@ def generate(  # noqa: PLR0915
         str | None,
         typer.Option("--input", "-I", help="JSON or YAML params (file path or inline; keys match CLI options)"),
     ] = None,
+    parallel_queue: Annotated[
+        int,
+        typer.Option(
+            "--parallel-queue",
+            "-P",
+            help=(
+                "Concurrent ComfyUI submissions (default 1). When >1 with --count N, "
+                "splits the request into N independent jobs (batch_size=1 each) with "
+                "incrementing seeds, executed P-at-a-time via thread pool. The GPU "
+                "still processes one prompt at a time, but HTTP queue / init / "
+                "download phases pipeline for a ~5-15%% speedup. Per-task output "
+                "interleaves; final summary lists all saved files. Ignored when "
+                "--count is 1."
+            ),
+        ),
+    ] = 1,
 ) -> None:
     """Generate an image using text-to-image.
 
@@ -887,6 +903,11 @@ def generate(  # noqa: PLR0915
     starting with ``{`` are JSON, everything else is YAML. CLI flags override
     --input values.
 
+    With --count > 1, images are generated as a single ComfyUI batch by default
+    (one workflow, sequential on GPU). Use --parallel-queue N to instead split
+    into N independent batch_size=1 jobs queued in parallel, each with its own
+    seed — useful for overlapping the HTTP/download phase across requests.
+
     Examples:
         tsr generate "a cat on a windowsill"
         tsr generate "portrait photo" -m ponyDiffusionV6XL_v6.safetensors -O portrait
@@ -895,7 +916,21 @@ def generate(  # noqa: PLR0915
         tsr generate --input '{"prompt": "a mech", "model": "flux1-dev-fp8.safetensors"}'
         tsr generate --input scene.yml
         tsr generate "raw prompt" --no-quality --no-negative
+        tsr generate "city" -c 8 -P 4 -o out.png   # 8 distinct seeds, 4 in flight
     """
+    if parallel_queue < 1:
+        console.print("[red]--parallel-queue must be >= 1[/red]")
+        raise typer.Exit(1)
+    if parallel_queue > 1 and json_output:
+        # _run_generation short-circuits the disk-save when json_output=True
+        # (it dumps JSON and returns). For the parallel fanout to actually save
+        # files, each task must take the non-JSON path. We render our own JSON
+        # at the end, so the per-task --json is incompatible.
+        console.print(
+            "[red]--json is not supported with --parallel-queue > 1 "
+            "(would skip the file-save step). Drop one or the other.[/red]"
+        )
+        raise typer.Exit(1)
     # ---- --input merging (JSON or YAML) ----
     if json_input is not None:
         ji = _parse_generate_input(json_input)
@@ -981,41 +1016,215 @@ def generate(  # noqa: PLR0915
             scene_prompt = sp_val if isinstance(sp_val, str) else ", ".join(str(x) for x in sp_val if str(x).strip())
         if "rating" in mapped and "rating" not in explicit:
             rating = mapped["rating"]
+        if "parallel_queue" in mapped and "parallel_queue" not in explicit:
+            parallel_queue = int(mapped["parallel_queue"])
 
     has_content = bool(prompt or character or character_prompt or scene or scene_prompt)
     if not has_content:
         console.print("[red]Prompt (or character/scene) is required[/red]")
         raise typer.Exit(1)
 
-    _run_generation(
-        prompt=prompt,
-        model=model,
-        width=width,
-        height=height,
-        steps=steps,
-        cfg=cfg,
-        guidance=guidance,
-        seed=seed,
-        sampler=sampler,
-        scheduler=scheduler,
-        vae=vae,
-        orientation=orientation,
-        lora=lora,
-        lora_strength=lora_strength,
-        negative=negative,
-        count=count,
-        rating=rating,
-        no_quality=no_quality,
-        no_negative=no_negative,
-        character=character,
-        character_prompt=character_prompt,
-        scene=scene,
-        scene_prompt=scene_prompt,
-        family=family,
-        output=output,
-        remote=remote,
-        json_output=json_output,
-    )
+    # Effective parallelism is bounded by count — running 4 threads for 1 image
+    # is silly. count=1 always goes through the sequential path regardless of -P.
+    effective_parallel = min(parallel_queue, count) if count > 1 else 1
+
+    if effective_parallel <= 1:
+        # Sequential path: single _run_generation call with batch_size=count.
+        # Unchanged from pre-parallel behavior — preserves existing output naming,
+        # JSON shape, and log lines exactly.
+        _run_generation(
+            prompt=prompt,
+            model=model,
+            width=width,
+            height=height,
+            steps=steps,
+            cfg=cfg,
+            guidance=guidance,
+            seed=seed,
+            sampler=sampler,
+            scheduler=scheduler,
+            vae=vae,
+            orientation=orientation,
+            lora=lora,
+            lora_strength=lora_strength,
+            negative=negative,
+            count=count,
+            rating=rating,
+            no_quality=no_quality,
+            no_negative=no_negative,
+            character=character,
+            character_prompt=character_prompt,
+            scene=scene,
+            scene_prompt=scene_prompt,
+            family=family,
+            output=output,
+            remote=remote,
+            json_output=json_output,
+        )
+        return
+
+    # ---- Parallel fanout path ----
+    # Split count into `count` independent jobs (batch_size=1), executed
+    # `effective_parallel` at a time. Each job gets a distinct seed and a
+    # distinct output path so writes don't clobber each other.
+    import random as _rng  # noqa: PLC0415
+    import time as _time  # noqa: PLC0415
+    from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+
+    # Resolve bare model/lora names ONCE in the parent before fanout. Each
+    # parallel _run_generation call silences its own console (json_output=True)
+    # which also skips the validation/resolution step in that path. Doing it
+    # here means each task receives a canonical filename and ComfyUI's strict
+    # loaders accept the request first try.
+    if model and not remote:
+        # Detect family for the right loader bucket (checkpoints vs diffusion_models).
+        # Mirrors the lookup _run_generation does on entry.
+        from tensors.db import Database  # noqa: PLC0415
+
+        _base_model: str | None = None
+        try:
+            with Database() as _db:
+                _db.init_schema()
+                _base_model = _db.get_base_model_by_filename(model)
+        except Exception:  # noqa: BLE001
+            pass
+        _detected = detect_model_family(model, _base_model)
+        _fam = family or _detected
+        try:
+            model, lora = _validate_model_available(model, _fam, lora)
+        except typer.Exit:
+            raise  # surface the same error path as sequential
+
+    # Seed strategy:
+    #   --seed >= 0 → use as base, increment per job (reproducible series)
+    #   --seed == -1 → pick a fresh random seed PER JOB so parallel runs aren't
+    #                  accidentally correlated (each thread gets variety)
+    if seed >= 0:
+        seeds = [seed + i for i in range(count)]
+    else:
+        seeds = [_rng.randint(0, 2**32 - 1) for _ in range(count)]
+
+    # Output paths: mirror the existing `count > 1` naming convention from
+    # _run_generation (stem_NNN.ext). When --output is omitted, leave per-task
+    # output as None — _run_generation will skip the disk write and the user
+    # gets only the console listing of generated image refs.
+    out_paths: list[Path | None] = []
+    for i in range(count):
+        if output is None:
+            out_paths.append(None)
+        else:
+            out_paths.append(output.parent / f"{output.stem}_{i + 1:03d}{output.suffix}")
+
+    if not json_output:
+        console.print(
+            f"[dim]Parallel queue: {effective_parallel} concurrent submissions "
+            f"× {count} images (output may interleave)[/dim]"
+        )
+
+    common_kwargs: dict[str, Any] = {
+        "prompt": prompt,
+        "model": model,
+        "width": width,
+        "height": height,
+        "steps": steps,
+        "cfg": cfg,
+        "guidance": guidance,
+        "sampler": sampler,
+        "scheduler": scheduler,
+        "vae": vae,
+        "orientation": orientation,
+        "lora": lora,
+        "lora_strength": lora_strength,
+        "negative": negative,
+        "count": 1,  # each task generates exactly one image
+        "rating": rating,
+        "no_quality": no_quality,
+        "no_negative": no_negative,
+        "character": character,
+        "character_prompt": character_prompt,
+        "scene": scene,
+        "scene_prompt": scene_prompt,
+        "family": family,
+        "remote": remote,
+        # NOTE: json_output stays False so _run_generation's disk-save path runs.
+        # Setting True would short-circuit before saving files. Per-task console
+        # chatter is the trade-off; the final summary still shows clean per-task
+        # status lines.
+        "json_output": False,
+    }
+
+    def _run_one(idx: int) -> dict[str, Any]:
+        """Run a single batch_size=1 job. Returns a result dict (success captured)."""
+        start = _time.perf_counter()
+        result: dict[str, Any] = {
+            "index": idx,
+            "seed": seeds[idx],
+            "output": str(out_paths[idx]) if out_paths[idx] is not None else None,
+            "duration_sec": 0.0,
+            "success": False,
+            "error": None,
+        }
+        try:
+            _run_generation(seed=seeds[idx], output=out_paths[idx], **common_kwargs)
+            result["duration_sec"] = round(_time.perf_counter() - start, 2)
+            result["success"] = True
+        except typer.Exit as ex:
+            result["duration_sec"] = round(_time.perf_counter() - start, 2)
+            result["error"] = f"generate exited with code {ex.exit_code}"
+        except Exception as ex:  # noqa: BLE001
+            result["duration_sec"] = round(_time.perf_counter() - start, 2)
+            result["error"] = str(ex)
+        return result
+
+    fan_results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=effective_parallel) as pool:
+        futures = {pool.submit(_run_one, i): i for i in range(count)}
+        completed = 0
+        for fut in as_completed(futures):
+            completed += 1
+            try:
+                res = fut.result()
+            except Exception as ex:  # noqa: BLE001 — defensive; _run_one already swallows
+                res = {
+                    "index": futures[fut],
+                    "seed": seeds[futures[fut]],
+                    "output": str(out_paths[futures[fut]]) if out_paths[futures[fut]] is not None else None,
+                    "duration_sec": 0.0,
+                    "success": False,
+                    "error": f"executor exception: {ex}",
+                }
+            fan_results.append(res)
+            if not json_output:
+                if res["success"]:
+                    where = res["output"] or "(no --output set)"
+                    console.print(
+                        f"[green]\\[{completed}/{count}] seed={res['seed']} "
+                        f"ok in {res['duration_sec']:.1f}s → {where}[/green]"
+                    )
+                else:
+                    console.print(
+                        f"[red]\\[{completed}/{count}] seed={res['seed']} FAIL: {res['error']}[/red]"
+                    )
+
+    # Reorder by original index so JSON output / final summary list is stable.
+    fan_results.sort(key=lambda r: r["index"])
+    successful = sum(1 for r in fan_results if r["success"])
+
+    if json_output:
+        console.print_json(
+            data={
+                "success": successful == count,
+                "count": count,
+                "parallel_queue": effective_parallel,
+                "results": fan_results,
+            }
+        )
+        return
+
+    console.print("[bold green]Generation complete![/bold green]")
+    console.print(f"[dim]Generated {successful}/{count} images at parallelism={effective_parallel}[/dim]")
+    if successful < count:
+        raise typer.Exit(1)
 
 
 # Map model family → which ComfyUI loader directory the checkpoint must live in.
