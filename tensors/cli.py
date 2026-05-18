@@ -780,6 +780,14 @@ def generate(  # noqa: PLR0915
     ] = None,
     no_quality: Annotated[bool, typer.Option("--no-quality", help="Disable auto quality tags")] = False,
     no_negative: Annotated[bool, typer.Option("--no-negative", help="Disable auto negative prompt")] = False,
+    character: Annotated[
+        str | None,
+        typer.Option("-C", "--character", help="Saved character name (loaded from ~/.local/share/tensors/characters/)"),
+    ] = None,
+    character_prompt: Annotated[
+        str | None,
+        typer.Option("--character-prompt", help='Inline character fragment, comma-separated (e.g. "blond hair, blue eyes")'),
+    ] = None,
     family: Annotated[
         str | None,
         typer.Option(
@@ -892,6 +900,21 @@ def generate(  # noqa: PLR0915
             no_quality = bool(mapped["no_quality"])
         if "no_negative" in mapped and "no_negative" not in explicit:
             no_negative = bool(mapped["no_negative"])
+        if "character" in mapped and "character" not in explicit:
+            # Accept either a saved-name string or an already-resolved list/tuple
+            # (templates may carry the resolved list inline). For lists we stage
+            # them into character_prompt by joining with commas so the existing
+            # CLI splitting/dedup path applies uniformly.
+            val = mapped["character"]
+            if isinstance(val, str):
+                character = val
+            elif isinstance(val, (list, tuple)):
+                character_prompt = ", ".join(str(x) for x in val if str(x).strip())
+        if "character_prompt" in mapped and "character_prompt" not in explicit:
+            cp_val = mapped["character_prompt"]
+            character_prompt = (
+                cp_val if isinstance(cp_val, str) else ", ".join(str(x) for x in cp_val if str(x).strip())
+            )
         if "rating" in mapped and "rating" not in explicit:
             rating = mapped["rating"]
 
@@ -919,6 +942,8 @@ def generate(  # noqa: PLR0915
         rating=rating,
         no_quality=no_quality,
         no_negative=no_negative,
+        character=character,
+        character_prompt=character_prompt,
         family=family,
         output=output,
         remote=remote,
@@ -1007,6 +1032,8 @@ def _run_generation(  # noqa: PLR0915
     rating: str | None = None,
     no_quality: bool = False,
     no_negative: bool = False,
+    character: str | None = None,
+    character_prompt: str | None = None,
     family: str | None = None,
     output: Path | None = None,
     remote: str | None = None,
@@ -1057,6 +1084,29 @@ def _run_generation(  # noqa: PLR0915
     # Add quality prefix based on model family
     if not no_quality and family_defaults.get("quality_prefix"):
         prompt_parts.append(family_defaults["quality_prefix"])
+
+    # Resolve character (named lookup + inline --character-prompt, merged + deduped)
+    character_elements: list[str] = []
+    if character or character_prompt:
+        from tensors.characters import resolve_character  # noqa: PLC0415
+
+        try:
+            character_elements = resolve_character(character=character, character_prompt=character_prompt)
+        except FileNotFoundError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+
+        if character_elements:
+            prompt_parts.extend(character_elements)
+            if not json_output:
+                origin = f"'{character}'" if character else "inline"
+                console.print(
+                    f"[dim]Character ({origin}, {len(character_elements)} elements): "
+                    f"{', '.join(character_elements)}[/dim]"
+                )
 
     # Add rating tag based on model family (Pony/Illustrious)
     if rating:
@@ -1301,6 +1351,8 @@ _STYLE_SWEEP_TEMPLATE_KEYS = {
     "orientation",
     "no_quality",
     "no_negative",
+    "character",
+    "character_prompt",
     "rating",
     "family",
     "remote",
@@ -1631,6 +1683,25 @@ def style_sweep(  # noqa: PLR0915
 
         pending_tasks.append((i, entry, result, out_path))
 
+    # Character resolution: templates may carry either a name string (look up
+    # at run-time) or an inline list of resolved elements (e.g. produced by
+    # `tsr template -C ...`). Lists are joined into `character_prompt` so
+    # _run_generation sees a uniform CSV string and skips the disk lookup.
+    char_val = tpl_data.get("character")
+    char_prompt_val = tpl_data.get("character_prompt")
+    char_name: str | None = None
+    char_inline: str | None = None
+    if isinstance(char_val, str):
+        char_name = char_val
+    elif isinstance(char_val, (list, tuple)):
+        char_inline = ", ".join(str(x) for x in char_val if str(x).strip())
+    if char_prompt_val is not None:
+        char_inline = (
+            char_prompt_val
+            if isinstance(char_prompt_val, str)
+            else ", ".join(str(x) for x in char_prompt_val if str(x).strip())
+        )
+
     # Common kwargs for every _run_generation call — extracted from the
     # template once, reused across sequential and parallel paths.
     base_gen_kwargs: dict[str, Any] = {
@@ -1652,6 +1723,8 @@ def style_sweep(  # noqa: PLR0915
         "rating": _t("rating"),
         "no_quality": bool(_t("no_quality", default=False)),
         "no_negative": bool(_t("no_negative", default=False)),
+        "character": char_name,
+        "character_prompt": char_inline,
         "family": _t("family"),
         "remote": gen_remote,
         "json_output": False,
@@ -1804,6 +1877,17 @@ def template(
     lora_strength: Annotated[float, typer.Option("--lora-strength", help="LoRA strength")] = 0.8,
     orientation: Annotated[str, typer.Option("-O", "--orientation", help="Resolution: square, portrait, landscape")] = "square",
     rating: Annotated[str | None, typer.Option("--rating", "-R", help="Content rating: safe, questionable, explicit")] = None,
+    character: Annotated[
+        str | None,
+        typer.Option("-C", "--character", help="Saved character name (resolved into the `character` list field)"),
+    ] = None,
+    character_prompt: Annotated[
+        str | None,
+        typer.Option(
+            "--character-prompt",
+            help='Inline character fragment, comma-separated (merged with --character into `character`)',
+        ),
+    ] = None,
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Save template to file")] = None,
 ) -> None:
     """Dump a JSON generation template with resolved defaults for a model.
@@ -1811,11 +1895,17 @@ def template(
     Outputs a ready-to-use JSON object with all parameters auto-resolved from the
     checkpoint family. Pipe to 'tsr generate --input' or save to a file for reuse.
 
+    ``--character`` and ``--character-prompt`` append a ``character`` list to the
+    template (saved-name elements first, inline elements appended, deduped).
+
     Examples:
         tsr template -m ponyDiffusionV6XL_v6StartWithThisOne.safetensors
         tsr template -m beautifulRealistic_v7.safetensors -O portrait
         tsr template -m waiIllustriousSDXL_v160.safetensors -l "Elvira iIlluLoRA.safetensors"
         tsr template -m ponyRealism_V22.safetensors -o pony_preset.json
+        tsr template -m flux1-dev.safetensors -C cassie_cage  # embeds saved character
+        tsr template -m flux1-dev.safetensors --character-prompt "blond hair, blue eyes"
+        tsr template -m flux1-dev.safetensors -C cassie --character-prompt "wet skin"
         tsr generate --input "$(tsr template -m ponyRealism_V22.safetensors)" "a portrait"
     """
     from tensors.config import get_model_generation_defaults, resolve_orientation  # noqa: PLC0415
@@ -1868,6 +1958,28 @@ def template(
     if lora:
         tpl["lora"] = lora
         tpl["lora_strength"] = lora_strength
+
+    # Resolve character into a flat list embedded in the template. When the
+    # template is later fed to `tsr generate --input`, _run_generation will
+    # treat a list under `character` as inline elements (no re-lookup needed).
+    # --character and --character-prompt merge in that order (named first,
+    # inline appended, duplicates dropped).
+    if character or character_prompt:
+        from tensors.characters import resolve_character  # noqa: PLC0415
+
+        try:
+            resolved = resolve_character(character=character, character_prompt=character_prompt)
+        except FileNotFoundError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+
+        if resolved:
+            tpl["character"] = resolved
+            if character:
+                tpl["_character_name"] = character
 
     # Add metadata (not used by generate, but informational)
     tpl["_family"] = family or "unknown"
@@ -2349,6 +2461,129 @@ def hf_download(
 
     result = download_hf_safetensor(model_id, filename, output_dir, console=console)
     if not result:
+        raise typer.Exit(1)
+
+
+# =============================================================================
+# Character Commands
+# =============================================================================
+# Characters are named, comma-split prompt fragments stored as YAML lists in
+# ~/.local/share/tensors/characters/<name>.yml. They are injected into the
+# positive prompt by `tsr generate --character <name>` (or inline via
+# `--character-prompt "elem1, elem2"`).
+
+character_app = typer.Typer(
+    name="character",
+    help="Manage saved character prompts (~/.local/share/tensors/characters/).",
+    no_args_is_help=True,
+)
+app.add_typer(character_app)
+
+
+@character_app.command("save")
+def character_save(
+    elements: Annotated[str, typer.Argument(help='Comma-separated prompt elements (e.g. "blond hair, blue eyes")')],
+    name: Annotated[str, typer.Option("-o", "--output", help="Character name (used as filename)")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Save a character as a YAML list of prompt elements.
+
+    Examples:
+        tsr character save -o cassie_cage "blond hair, broad chin, skin imperfections"
+        tsr character save -o elvira "long black hair, pale skin, gothic dress"
+    """
+    from tensors.characters import parse_elements, save_character  # noqa: PLC0415
+
+    parsed = parse_elements(elements)
+    if not parsed:
+        console.print("[red]No usable elements after splitting on commas[/red]")
+        raise typer.Exit(1)
+
+    try:
+        path = save_character(name, parsed)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"name": name, "path": str(path), "elements": parsed})
+        return
+
+    console.print(f"[green]Saved character '{name}' ({len(parsed)} elements):[/green] {path}")
+    for elem in parsed:
+        console.print(f"  • {elem}")
+
+
+@character_app.command("list")
+def character_list(
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """List saved characters."""
+    from tensors.characters import CHARACTERS_DIR, list_characters  # noqa: PLC0415
+
+    names = list_characters()
+    if json_output:
+        console.print_json(data={"dir": str(CHARACTERS_DIR), "characters": names})
+        return
+
+    if not names:
+        console.print(f"[yellow]No characters saved in {CHARACTERS_DIR}.[/yellow]")
+        console.print("[dim]Create one with: tsr character save -o <name> \"elem1, elem2\"[/dim]")
+        return
+
+    console.print(f"[bold]Characters[/bold] ({len(names)}) [dim]in {CHARACTERS_DIR}[/dim]")
+    for n in names:
+        console.print(f"  • {n}")
+
+
+@character_app.command("show")
+def character_show(
+    name: Annotated[str, typer.Argument(help="Character name")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Show a character's elements."""
+    from tensors.characters import character_path, load_character  # noqa: PLC0415
+
+    try:
+        elements = load_character(name)
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"name": name, "path": str(character_path(name)), "elements": elements})
+        return
+
+    console.print(f"[bold]{name}[/bold] [dim]({character_path(name)})[/dim]")
+    for elem in elements:
+        console.print(f"  • {elem}")
+
+
+@character_app.command("delete")
+def character_delete(
+    name: Annotated[str, typer.Argument(help="Character name")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Delete a saved character."""
+    from tensors.characters import delete_character  # noqa: PLC0415
+
+    try:
+        deleted = delete_character(name)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"name": name, "deleted": deleted})
+        return
+
+    if deleted:
+        console.print(f"[green]Deleted character '{name}'[/green]")
+    else:
+        console.print(f"[yellow]Character '{name}' does not exist[/yellow]")
         raise typer.Exit(1)
 
 
