@@ -1485,7 +1485,7 @@ def _run_generation(  # noqa: PLR0915
 
     # ---- Resolve preset defaults for None params (both remote and local need these) ----
     from tensors.config import resolve_orientation  # noqa: PLC0415
-    from tensors.config import resolve_remote as do_resolve_remote
+    from tensors.config import resolve_remote as do_resolve_remote  # noqa: PLC0415
 
     # Use already-detected family_defaults from DB lookup above (not filename guessing)
     if family_defaults:
@@ -2087,7 +2087,7 @@ def style_sweep(  # noqa: PLR0915
 
     def _run_one(task: tuple[int, dict[str, str], dict[str, Any], Path]) -> dict[str, Any]:
         """Run a single style. Returns the result dict (success or error captured)."""
-        idx, entry_in, res, opath = task
+        _idx, _entry_in, res, opath = task
         composed = res["prompt"]
         start = time.perf_counter()
         try:
@@ -2139,11 +2139,9 @@ def style_sweep(  # noqa: PLR0915
 
         with ThreadPoolExecutor(max_workers=parallel_queue) as pool:
             futures = {pool.submit(_run_one, task): task for task in pending_tasks}
-            completed = 0
-            for fut in as_completed(futures):
-                completed += 1
+            for completed, fut in enumerate(as_completed(futures), start=1):
                 task = futures[fut]
-                idx, _entry, _res, _out_path = task
+                idx, _entry, _res, _out_path = task  # idx used in log message below
                 try:
                     res = fut.result()
                 except Exception as ex:
@@ -2226,7 +2224,7 @@ def _print_styles_list(styles_origin: str, entries: list[dict[str, str]]) -> Non
 
 
 @app.command()
-def template(
+def template(  # noqa: PLR0915
     model: Annotated[str, typer.Option("-m", "--model", help="Checkpoint model name")],
     lora: Annotated[str | None, typer.Option("-l", "--lora", help="LoRA model name")] = None,
     lora_strength: Annotated[float, typer.Option("--lora-strength", help="LoRA strength")] = 0.8,
@@ -3044,7 +3042,7 @@ def scene_extract(
     target_file = None
     for f in files:
         file_path = Path(f["file_path"])
-        if file_path.name == model or file_path.stem == model:
+        if model in (file_path.name, file_path.stem):
             target_file = f
             break
 
@@ -3172,7 +3170,7 @@ app.add_typer(templates_app)
 
 
 @templates_app.command("extract")
-def templates_extract(
+def templates_extract(  # noqa: PLR0915
     model: Annotated[str, typer.Argument(help="Local model name (e.g. lust_v10.safetensors)")],
     orientation: Annotated[str, typer.Option("-O", "--orientation", help="Resolution: square, portrait, landscape")] = "portrait",
     no_overrides: Annotated[

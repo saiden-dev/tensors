@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/comfyui", tags=["ComfyUI API"])
 
+# Schema default sentinels — see GenerateRequest defaults. These let us detect
+# "user accepted default" vs "user explicitly chose this value matching default"
+# is intentionally not distinguished; both paths apply family overrides.
+_DEFAULT_STEPS = 20
+_DEFAULT_CFG = 7.0
+# Logging truncation threshold for long prompts in info-level output.
+_PROMPT_LOG_TRUNCATE = 100
+
 
 # =============================================================================
 # Request/Response Models
@@ -262,9 +270,9 @@ def comfyui_generate(request: GenerateRequest) -> dict[str, Any]:
             sampler = family_defaults["sampler"]
         if request.scheduler == "normal":  # Default value in schema
             scheduler = family_defaults["scheduler"]
-        if request.steps == 20:  # Default value in schema
+        if request.steps == _DEFAULT_STEPS:  # Default value in schema
             steps = family_defaults["steps"]
-        if request.cfg == 7.0:  # Default value in schema
+        if request.cfg == _DEFAULT_CFG:  # Default value in schema
             cfg = family_defaults["cfg"]
         # Only override VAE if user explicitly specified one;
         # otherwise use checkpoint's built-in VAE (vae stays None)
@@ -290,7 +298,7 @@ def comfyui_generate(request: GenerateRequest) -> dict[str, Any]:
         sampler,
         scheduler,
         lora_info,
-        request.prompt[:100] + "..." if len(request.prompt) > 100 else request.prompt,
+        request.prompt[:_PROMPT_LOG_TRUNCATE] + "..." if len(request.prompt) > _PROMPT_LOG_TRUNCATE else request.prompt,
     )
     if request.negative_prompt:
         logger.debug("Negative prompt: %r", request.negative_prompt[:100])

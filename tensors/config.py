@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import tomllib
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -65,7 +65,7 @@ CIVITAI_DOWNLOAD_BASE = "https://civitai.com/api/download/models"
 # ============================================================================
 
 
-class Provider(str, Enum):
+class Provider(StrEnum):
     """Model search providers."""
 
     civitai = "civitai"
@@ -73,7 +73,7 @@ class Provider(str, Enum):
     all = "all"
 
 
-class ModelType(str, Enum):
+class ModelType(StrEnum):
     """CivitAI model types."""
 
     checkpoint = "checkpoint"
@@ -110,7 +110,7 @@ class ModelType(str, Enum):
         return mapping[self.value]
 
 
-class BaseModel(str, Enum):
+class BaseModel(StrEnum):
     """Common base models."""
 
     # Stable Diffusion 1.x
@@ -166,7 +166,7 @@ class BaseModel(str, Enum):
         return mapping[self.value]
 
 
-class SortOrder(str, Enum):
+class SortOrder(StrEnum):
     """Sort options for search."""
 
     downloads = "downloads"
@@ -183,7 +183,7 @@ class SortOrder(str, Enum):
         return mapping[self.value]
 
 
-class Period(str, Enum):
+class Period(StrEnum):
     """Time period for sorting/filtering."""
 
     all = "all"
@@ -204,7 +204,7 @@ class Period(str, Enum):
         return mapping[self.value]
 
 
-class NsfwLevel(str, Enum):
+class NsfwLevel(StrEnum):
     """NSFW content filter level."""
 
     none = "none"
@@ -219,7 +219,7 @@ class NsfwLevel(str, Enum):
         return self.value.capitalize() if self.value != "none" else "None"
 
 
-class CommercialUse(str, Enum):
+class CommercialUse(StrEnum):
     """Commercial use permissions."""
 
     none = "none"
