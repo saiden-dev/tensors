@@ -2909,6 +2909,262 @@ def scene_delete(
         raise typer.Exit(1)
 
 
+# ---- templates ----
+
+templates_app = typer.Typer(
+    name="templates",
+    help="Bulk-extract, list, and run generation templates derived from CivitAI showcase data.",
+    no_args_is_help=True,
+)
+app.add_typer(templates_app)
+
+
+@templates_app.command("extract")
+def templates_extract(
+    model: Annotated[str, typer.Argument(help="Local model name (e.g. lust_v10.safetensors)")],
+    orientation: Annotated[
+        str, typer.Option("-O", "--orientation", help="Resolution: square, portrait, landscape")
+    ] = "portrait",
+    no_overrides: Annotated[
+        bool,
+        typer.Option(
+            "--no-overrides",
+            help="Skip auto-derived params from showcase image meta; use family defaults only",
+        ),
+    ] = False,
+    api_key: Annotated[str | None, typer.Option("--api-key", help="CivitAI API key")] = None,
+    limit: Annotated[
+        int, typer.Option("--limit", "-L", help="Max templates to write (0 = all unique prompts)")
+    ] = 0,
+    overwrite: Annotated[
+        bool, typer.Option("--overwrite", help="Overwrite existing template files (default: skip)")
+    ] = False,
+    do_generate: Annotated[
+        bool,
+        typer.Option("--generate", help="After writing, run `tsr generate --input` for each emitted template"),
+    ] = False,
+    output_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--output-dir", help="Where to write generated images when --generate (default: ComfyUI output dir)"
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Print what would be done; write nothing")
+    ] = False,
+) -> None:
+    """Bulk-extract templates from a model's CivitAI showcase.
+
+    Pulls showcase images, deduplicates prompts, derives recommended generation
+    params (sampler / scheduler / steps / cfg / guidance) from the *mode* of the
+    showcase image metadata, and writes one JSON template per unique prompt to
+    ``~/.local/share/tensors/templates/<model_stem>/<scene_name>.json``.
+
+    Each emitted template is ready to feed straight to ``tsr generate --input``.
+
+    Examples:
+        tsr templates extract lust_v10.safetensors
+        tsr templates extract bodySliderFitness_v10 -O portrait --generate
+        tsr templates extract ultrasenseInfinity_v10 --dry-run
+        tsr templates extract getphat_v5 --no-overrides   # use tsr family defaults only
+    """
+    import subprocess  # noqa: PLC0415
+
+    from tensors.api import fetch_civitai_model_version  # noqa: PLC0415
+    from tensors.config import (  # noqa: PLC0415
+        detect_model_family,
+        get_model_generation_defaults,
+        load_api_key,
+        resolve_orientation,
+    )
+    from tensors.fragments import parse_elements  # noqa: PLC0415
+    from tensors.templates import (  # noqa: PLC0415
+        build_template,
+        derive_overrides_from_images,
+        save_template,
+        template_path,
+    )
+
+    with Database() as db:
+        files = db.list_local_files()
+
+    target_file = None
+    for f in files:
+        file_path = Path(f["file_path"])
+        if model in (file_path.name, file_path.stem):
+            target_file = f
+            break
+
+    if not target_file:
+        console.print(f"[red]Model '{model}' not found in local database. Run 'tsr db scan' first.[/red]")
+        raise typer.Exit(1)
+
+    vid = target_file["civitai_version_id"]
+    if not vid:
+        console.print(f"[red]Model '{model}' is not linked to CivitAI. Run 'tsr db link' first.[/red]")
+        raise typer.Exit(1)
+
+    model_stem = Path(target_file["file_path"]).stem
+    model_filename = Path(target_file["file_path"]).name
+    base_model_str = target_file.get("base_model")
+
+    console.print(f"[cyan]Fetching showcase for {model_stem} (version {vid})...[/cyan]")
+    data = fetch_civitai_model_version(vid, api_key or load_api_key(), console=console)
+    if not data:
+        console.print("[red]Failed to fetch CivitAI data.[/red]")
+        raise typer.Exit(1)
+
+    images = data.get("images", [])
+    enriched = sum(1 for img in images if img.get("meta"))
+
+    overrides = {} if no_overrides else derive_overrides_from_images(images)
+    if overrides:
+        console.print(f"[cyan]Derived overrides from {enriched} enriched image(s):[/cyan] {overrides}")
+    elif not no_overrides:
+        console.print("[yellow]No usable param meta in showcase; using family defaults only.[/yellow]")
+
+    family = detect_model_family(model_filename, base_model_str)
+    defaults = get_model_generation_defaults(model_filename, base_model_str)
+    res_w, res_h = resolve_orientation(family, orientation)
+
+    seen_prompts: set[str] = set()
+    emitted: list[Path] = []
+    skipped_existing = 0
+    skipped_no_prompt = 0
+
+    for img in images:
+        meta = img.get("meta") or {}
+        prompt = meta.get("prompt")
+        if not prompt:
+            skipped_no_prompt += 1
+            continue
+        normalized = prompt.lower().strip()
+        if normalized in seen_prompts:
+            continue
+        seen_prompts.add(normalized)
+
+        scene_elements = parse_elements(prompt)
+        if not scene_elements:
+            continue
+
+        idx = len(emitted) + skipped_existing + 1
+        name = f"{model_stem}_{idx:02d}"
+        out_path = template_path(model_stem, name)
+
+        if out_path.is_file() and not overwrite:
+            console.print(f"[yellow]Skip (exists, use --overwrite to replace):[/yellow] {out_path}")
+            skipped_existing += 1
+            continue
+
+        tpl = build_template(
+            model_filename=model_filename,
+            family=family,
+            defaults=defaults,
+            base_model_str=base_model_str,
+            width=res_w,
+            height=res_h,
+            orientation=orientation,
+            scene_elements=scene_elements,
+            scene_name=name,
+            overrides=overrides,
+        )
+
+        if dry_run:
+            console.print(f"[dim](dry-run) Would write:[/dim] {out_path}")
+            emitted.append(out_path)
+        else:
+            saved = save_template(model_stem, name, tpl)
+            console.print(f"[green]Saved ({len(scene_elements)} scene elements):[/green] {saved}")
+            emitted.append(saved)
+
+        if limit and len(emitted) >= limit:
+            break
+
+    console.print(
+        f"\n[bold]Extract summary:[/bold] emitted={len(emitted)} skipped_existing={skipped_existing} "
+        f"images_no_prompt={skipped_no_prompt}"
+    )
+
+    if not emitted:
+        return
+
+    if do_generate:
+        if dry_run:
+            console.print("[yellow]--dry-run is set; skipping --generate phase.[/yellow]")
+            return
+        console.print(f"\n[cyan]Generating images for {len(emitted)} template(s)...[/cyan]")
+        for tpl_path in emitted:
+            out_arg = []
+            if output_dir:
+                output_dir.mkdir(parents=True, exist_ok=True)
+                out_arg = ["-o", str(output_dir / f"{tpl_path.stem}.png")]
+            cmd = ["tsr", "generate", "--input", str(tpl_path), *out_arg]
+            console.print(f"\n[cyan]$ {' '.join(cmd)}[/cyan]")
+            subprocess.run(cmd, check=False)
+
+
+@templates_app.command("list")
+def templates_list(
+    model: Annotated[str | None, typer.Argument(help="Filter by model stem (optional)")] = None,
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """List saved templates, grouped by model."""
+    from tensors.templates import TEMPLATES_DIR, list_templates  # noqa: PLC0415
+
+    items = list_templates(model)
+    if json_output:
+        console.print_json(
+            data={"dir": str(TEMPLATES_DIR), "templates": [{"model": m, "name": n} for m, n in items]}
+        )
+        return
+    if not items:
+        scope = f" for model '{model}'" if model else ""
+        console.print(f"[yellow]No templates{scope} in {TEMPLATES_DIR}.[/yellow]")
+        console.print("[dim]Create some with: tsr templates extract <model>[/dim]")
+        return
+    cur_model = None
+    for m, n in items:
+        if m != cur_model:
+            console.print(f"\n[cyan]{m}[/cyan]")
+            cur_model = m
+        console.print(f"  {n}")
+
+
+@templates_app.command("show")
+def templates_show(
+    model: Annotated[str, typer.Argument(help="Model stem (directory name under templates/)")],
+    name: Annotated[str, typer.Argument(help="Template name (filename without .json)")],
+) -> None:
+    """Print a saved template as JSON."""
+    from tensors.templates import load_template  # noqa: PLC0415
+
+    try:
+        data = load_template(model, name)
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+    console.print_json(data=data)
+
+
+@templates_app.command("delete")
+def templates_delete(
+    model: Annotated[str, typer.Argument(help="Model stem")],
+    name: Annotated[str, typer.Argument(help="Template name")],
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation")] = False,
+) -> None:
+    """Delete a saved template."""
+    from tensors.templates import delete_template, template_path  # noqa: PLC0415
+
+    path = template_path(model, name)
+    if not path.is_file():
+        console.print(f"[yellow]Template not found: {path}[/yellow]")
+        raise typer.Exit(1)
+    if not yes:
+        typer.confirm(f"Delete {path}?", abort=True)
+    if delete_template(model, name):
+        console.print(f"[green]Deleted:[/green] {path}")
+
+
 # =============================================================================
 # ComfyUI Commands
 # =============================================================================
