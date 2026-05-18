@@ -932,8 +932,9 @@ def generate(  # noqa: PLR0915
         if "rating" in mapped and "rating" not in explicit:
             rating = mapped["rating"]
 
-    if not prompt:
-        console.print("[red]Prompt is required (as argument or in --input JSON)[/red]")
+    has_content = bool(prompt or character or character_prompt or scene or scene_prompt)
+    if not has_content:
+        console.print("[red]Prompt (or character/scene) is required[/red]")
         raise typer.Exit(1)
 
     _run_generation(
@@ -1078,7 +1079,7 @@ def _validate_model_available(model: str, family: str | None, lora: str | None) 
 
 def _run_generation(  # noqa: PLR0915
     *,
-    prompt: str,
+    prompt: str | None = None,
     model: str | None = None,
     width: int | None = None,
     height: int | None = None,
@@ -1212,8 +1213,9 @@ def _run_generation(  # noqa: PLR0915
             console.print(f"[dim]Rating '{rating}' not applicable for {model_family or 'unknown'} family[/dim]")
 
     # Add user prompt
-    prompt_parts.append(prompt)
-    enhanced_prompt = ", ".join(prompt_parts) if len(prompt_parts) > 1 else prompt
+    if prompt:
+        prompt_parts.append(prompt)
+    enhanced_prompt = ", ".join(prompt_parts) if prompt_parts else ""
 
     # Build enhanced negative prompt
     enhanced_negative = negative
@@ -1630,10 +1632,17 @@ def style_sweep(  # noqa: PLR0915
         if unknown:
             console.print(f"[yellow]Unknown template keys ignored:[/yellow] {sorted(unknown)}")
 
-    # base_prompt is required for generation but irrelevant for --list
+    # base_prompt is optional if character or scene fields are provided
     base_prompt = tpl_data.get("prompt") if template is not None else None
-    if not list_styles and (not base_prompt or not isinstance(base_prompt, str)):
-        console.print("[red]Template missing required 'prompt' string[/red]")
+    has_content = bool(
+        base_prompt
+        or tpl_data.get("character")
+        or tpl_data.get("character_prompt")
+        or tpl_data.get("scene")
+        or tpl_data.get("scene_prompt")
+    )
+    if not list_styles and not has_content:
+        console.print("[red]Template missing required 'prompt', 'character', or 'scene'[/red]")
         raise typer.Exit(1)
 
     # ---- Resolve styles source ----
@@ -2761,6 +2770,70 @@ def scene_save(
     console.print(f"[green]Saved scene '{name}' ({len(parsed)} elements):[/green] {path}")
     for elem in parsed:
         console.print(f"  • {elem}")
+
+
+@scene_app.command("extract")
+def scene_extract(
+    model: Annotated[str, typer.Argument(help="Local model name (e.g. lust_v10.safetensors)")],
+    api_key: Annotated[str | None, typer.Option("--api-key", help="CivitAI API key")] = None,
+) -> None:
+    """Extract example prompts from a model's CivitAI showcase and save as scenes."""
+    from pathlib import Path  # noqa: PLC0415
+
+    from tensors.api import fetch_civitai_model_version  # noqa: PLC0415
+    from tensors.config import load_api_key  # noqa: PLC0415
+    from tensors.db import Database  # noqa: PLC0415
+    from tensors.fragments import parse_elements  # noqa: PLC0415
+    from tensors.scenes import save_scene  # noqa: PLC0415
+
+    with Database() as db:
+        files = db.list_local_files()
+
+    target_file = None
+    for f in files:
+        file_path = Path(f["file_path"])
+        if file_path.name == model or file_path.stem == model:
+            target_file = f
+            break
+
+    if not target_file:
+        console.print(f"[red]Model '{model}' not found in local database. Run 'tsr db scan' first.[/red]")
+        raise typer.Exit(1)
+
+    vid = target_file["civitai_version_id"]
+    if not vid:
+        console.print(f"[red]Model '{model}' is not linked to CivitAI. Run 'tsr db link' first.[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[cyan]Fetching showcase images for version ID {vid}...[/cyan]")
+    data = fetch_civitai_model_version(vid, api_key or load_api_key(), console=console)
+    if not data:
+        console.print("[red]Failed to fetch model data from CivitAI.[/red]")
+        raise typer.Exit(1)
+
+    images = data.get("images", [])
+    seen_prompts = set()
+    idx = 1
+    base_name = Path(target_file["file_path"]).stem
+
+    for img in images:
+        meta = img.get("meta", {})
+        prompt = meta.get("prompt")
+        if not prompt:
+            continue
+
+        normalized = prompt.lower().strip()
+        if normalized not in seen_prompts:
+            seen_prompts.add(normalized)
+            parsed = parse_elements(prompt)
+            if parsed:
+                scene_name = f"{base_name}_{idx:02d}"
+                path = save_scene(scene_name, parsed)
+                console.print(f"[green]Saved {scene_name} ({len(parsed)} elements):[/green] {path}")
+                idx += 1
+
+    if idx == 1:
+        console.print("[yellow]No example prompts found in showcase images.[/yellow]")
 
 
 @scene_app.command("list")
