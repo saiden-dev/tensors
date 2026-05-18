@@ -80,6 +80,66 @@ MAX_QUEUE_DISPLAY = 10
 MAX_MODEL_LIST_DISPLAY = 20
 MAX_PROMPT_ID_DISPLAY = 36
 
+# File extensions that force YAML parsing for `tsr generate --input <file>`.
+_YAML_INPUT_EXTENSIONS = frozenset({".yml", ".yaml"})
+
+
+def _parse_generate_input(value: str) -> dict[str, Any]:
+    """Parse a ``--input`` argument into a dict of generation params.
+
+    Accepts either:
+      * a path to a ``.json`` / ``.yml`` / ``.yaml`` file,
+      * a raw JSON object string (``{"prompt": ...}``),
+      * a raw YAML document string (anything else that doesn't start with ``{``).
+
+    File extension wins when reading from disk. For inline strings we try JSON
+    first (current behaviour) and fall back to YAML so existing callers keep
+    working without surprises.
+
+    Raises ``typer.Exit(1)`` with a rich error on every failure path so callers
+    don't need to repeat the diagnostics.
+    """
+    import yaml  # noqa: PLC0415 — keep yaml a soft import path
+
+    # ---- locate source text + decide format ----
+    path = Path(value)
+    if path.is_file():
+        text = path.read_text()
+        suffix = path.suffix.lower()
+        if suffix in _YAML_INPUT_EXTENSIONS:
+            fmt = "yaml"
+        elif suffix == ".json":
+            fmt = "json"
+        else:
+            # Unknown extension: sniff the content. Leading '{' or '[' → JSON.
+            fmt = "json" if text.lstrip().startswith(("{", "[")) else "yaml"
+    elif value.lstrip().startswith("{"):
+        text = value
+        fmt = "json"
+    else:
+        # Last-resort: treat as inline YAML. This is unusual but lets the user
+        # pass ``--input 'prompt: foo\nmodel: bar.safetensors'`` without quoting
+        # a JSON object on the shell.
+        text = value
+        fmt = "yaml"
+
+    # ---- parse ----
+    parsed: Any
+    try:
+        parsed = json.loads(text) if fmt == "json" else yaml.safe_load(text)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Invalid JSON input:[/red] {e}")
+        raise typer.Exit(1) from e
+    except yaml.YAMLError as e:
+        console.print(f"[red]Invalid YAML input:[/red] {e}")
+        raise typer.Exit(1) from e
+
+    if not isinstance(parsed, dict):
+        console.print(f"[red]{fmt.upper()} input must be a mapping/object[/red]")
+        raise typer.Exit(1)
+
+    return parsed
+
 
 def _cache_model_quietly(model_data: dict[str, Any]) -> None:
     """Cache model data to database without output."""
@@ -810,7 +870,10 @@ def generate(  # noqa: PLR0915
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Save path (default: current dir)")] = None,
     remote: Annotated[str | None, typer.Option("-r", "--remote", help="Remote server name or URL")] = None,
     json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
-    json_input: Annotated[str | None, typer.Option("--input", "-I", help="JSON params (keys match CLI options)")] = None,
+    json_input: Annotated[
+        str | None,
+        typer.Option("--input", "-I", help="JSON or YAML params (file path or inline; keys match CLI options)"),
+    ] = None,
 ) -> None:
     """Generate an image using text-to-image.
 
@@ -818,7 +881,11 @@ def generate(  # noqa: PLR0915
     model family. All auto-detected values can be overridden with explicit flags.
 
     Calls ComfyUI directly when local, or the remote tensors API when --remote is given.
-    Accepts --input with a JSON object whose keys match CLI option names. CLI flags override JSON values.
+    Accepts --input with a JSON or YAML object whose keys match CLI option names.
+    Files ending in ``.yml`` / ``.yaml`` are parsed as YAML; ``.json`` (or any
+    other extension whose contents start with ``{``/``[``) as JSON. Inline strings
+    starting with ``{`` are JSON, everything else is YAML. CLI flags override
+    --input values.
 
     Examples:
         tsr generate "a cat on a windowsill"
@@ -826,31 +893,14 @@ def generate(  # noqa: PLR0915
         tsr generate "cyberpunk city" -o output.png --count 4
         tsr generate "landscape" --remote junkpile
         tsr generate --input '{"prompt": "a mech", "model": "flux1-dev-fp8.safetensors"}'
+        tsr generate --input scene.yml
         tsr generate "raw prompt" --no-quality --no-negative
     """
-    # ---- JSON input merging ----
+    # ---- --input merging (JSON or YAML) ----
     if json_input is not None:
-        # Support file paths and raw JSON strings
-        json_path = Path(json_input)
-        if json_path.is_file():
-            json_text = json_path.read_text()
-        elif json_input.lstrip().startswith("{"):
-            json_text = json_input
-        else:
-            console.print(f"[red]Not a JSON string or file:[/red] {json_input}")
-            raise typer.Exit(1)
+        ji = _parse_generate_input(json_input)
 
-        try:
-            ji = json.loads(json_text)
-        except json.JSONDecodeError as e:
-            console.print(f"[red]Invalid JSON input:[/red] {e}")
-            raise typer.Exit(1) from e
-
-        if not isinstance(ji, dict):
-            console.print("[red]JSON input must be an object[/red]")
-            raise typer.Exit(1)
-
-        # Map JSON keys to parameter names (handle aliases)
+        # Map source keys to parameter names (handle aliases)
         key_map = {"negative_prompt": "negative", "lora_name": "lora"}
         mapped: dict[str, Any] = {}
         for k, v in ji.items():
