@@ -26,6 +26,11 @@ GALLERY_DIR = DATA_DIR / "gallery"
 LEGACY_RC_FILE = Path.home() / ".sftrc"
 
 # Default download paths by model type (can be overridden in config.toml [paths])
+#
+# Note: "DiffusionModel" is not an official CivitAI model_type — CivitAI lumps
+# UNet-only files (e.g. Flux UNet released separately from CLIP+VAE) under
+# "Checkpoint". The DiffusionModel entry here exists so users can register a
+# ComfyUI `diffusion_models/` path and target it manually via `tsr dl -o`.
 DEFAULT_PATHS: dict[str, Path] = {
     "Checkpoint": MODELS_DIR / "checkpoints",
     "LORA": MODELS_DIR / "loras",
@@ -34,8 +39,22 @@ DEFAULT_PATHS: dict[str, Path] = {
     "VAE": MODELS_DIR / "vae",
     "Controlnet": MODELS_DIR / "controlnet",
     "Upscaler": MODELS_DIR / "upscalers",
+    "DiffusionModel": MODELS_DIR / "diffusion_models",
     "Other": MODELS_DIR / "other",
 }
+
+# Config-file keys accepted by `tsr config --set-path KEY=PATH`. Single source
+# of truth shared between the CLI validator and the display-marker logic.
+VALID_PATH_TYPES: list[str] = [
+    "checkpoints",
+    "loras",
+    "embeddings",
+    "vae",
+    "controlnet",
+    "upscalers",
+    "diffusion_models",
+    "other",
+]
 
 CIVITAI_API_BASE = "https://civitai.com/api/v1"
 CIVITAI_DOWNLOAD_BASE = "https://civitai.com/api/download/models"
@@ -297,7 +316,8 @@ def get_model_paths() -> dict[str, Path]:
     config = load_config()
     paths_config = config.get("paths", {})
 
-    # Map config keys to CivitAI model types
+    # Map config keys to CivitAI model types. "diffusion_models" maps to the
+    # synthetic "DiffusionModel" bucket (see DEFAULT_PATHS for rationale).
     key_to_types = {
         "checkpoints": ["Checkpoint"],
         "loras": ["LORA", "LoCon"],
@@ -305,6 +325,7 @@ def get_model_paths() -> dict[str, Path]:
         "vae": ["VAE"],
         "controlnet": ["Controlnet"],
         "upscalers": ["Upscaler"],
+        "diffusion_models": ["DiffusionModel"],
         "other": ["Other"],
     }
 
@@ -745,12 +766,33 @@ FLUX_UNET_ONLY_PATTERNS: tuple[str, ...] = (
     "getphatflux",  # getphatFLUXReality_v11Softcore.safetensors
     "moodydesire",  # moodyDesireMix_v20PRO.safetensors
     "fcfluxpony",  # fcFluxPonyPerfectBase_fcFluxPerfectBase.safetensors
+    "prototype_",  # prototype_v10.safetensors (Flux unet-only, no "flux" in name)
 )
 
 
 def _is_flux_unet_only(name_lower: str) -> bool:
     """True if the lowercased filename matches a known UNet-only Flux pattern."""
     return any(p in name_lower for p in FLUX_UNET_ONLY_PATTERNS)
+
+
+# All-in-one Flux checkpoint filename substrings (case-insensitive). These
+# checkpoints bundle UNet + CLIP-L + T5 + VAE in a single file (loadable via
+# CheckpointLoaderSimple), but their filename does NOT contain "flux" so the
+# generic substring check misses them and they fall through to SDXL defaults
+# (which fails when the SDXL VAE isn't installed on the target backend).
+#
+# Detect via header inspection: keys like `model.diffusion_model.double_blocks.*`
+# plus bundled `text_encoders.*` and `vae.*` prefixes indicate FLUX all-in-one.
+# Add new patterns here as we encounter them.
+FLUX_ALL_IN_ONE_PATTERNS: tuple[str, ...] = (
+    "ultrasense",  # ultrasenseInfinity_v10.safetensors
+    "bodyslider",  # bodySliderFitness_v10.safetensors
+)
+
+
+def _is_flux_all_in_one(name_lower: str) -> bool:
+    """True if the lowercased filename matches a known all-in-one Flux pattern."""
+    return any(p in name_lower for p in FLUX_ALL_IN_ONE_PATTERNS)
 
 
 # Flux.2 Klein 9B filename substrings (case-insensitive). These checkpoints are
@@ -803,6 +845,14 @@ def detect_model_family(model_name: str, base_model: str | None = None) -> str |
     # field — these checkpoints are often mis-tagged on CivitAI.
     if _is_flux_unet_only(name_lower):
         return "flux_unet"
+
+    # All-in-one Flux override for checkpoints whose filename omits "flux"
+    # (e.g. "ultrasenseInfinity_v10.safetensors"). Without this they fall
+    # through to the SDXL default at the bottom of this function and the
+    # generated workflow asks ComfyUI for sdxl_vae.safetensors — which fails
+    # on Flux-only backends like sin.
+    if _is_flux_all_in_one(name_lower):
+        return "flux"
 
     # Architecture override: filename containing "flux" wins over any base_model
     # field (handles hybrid models like "FluxPony" that CivitAI tags as "Pony"
