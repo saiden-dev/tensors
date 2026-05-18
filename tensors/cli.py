@@ -912,9 +912,7 @@ def generate(  # noqa: PLR0915
                 character_prompt = ", ".join(str(x) for x in val if str(x).strip())
         if "character_prompt" in mapped and "character_prompt" not in explicit:
             cp_val = mapped["character_prompt"]
-            character_prompt = (
-                cp_val if isinstance(cp_val, str) else ", ".join(str(x) for x in cp_val if str(x).strip())
-            )
+            character_prompt = cp_val if isinstance(cp_val, str) else ", ".join(str(x) for x in cp_val if str(x).strip())
         if "rating" in mapped and "rating" not in explicit:
             rating = mapped["rating"]
 
@@ -1104,8 +1102,7 @@ def _run_generation(  # noqa: PLR0915
             if not json_output:
                 origin = f"'{character}'" if character else "inline"
                 console.print(
-                    f"[dim]Character ({origin}, {len(character_elements)} elements): "
-                    f"{', '.join(character_elements)}[/dim]"
+                    f"[dim]Character ({origin}, {len(character_elements)} elements): {', '.join(character_elements)}[/dim]"
                 )
 
     # Add rating tag based on model family (Pony/Illustrious)
@@ -1697,9 +1694,7 @@ def style_sweep(  # noqa: PLR0915
         char_inline = ", ".join(str(x) for x in char_val if str(x).strip())
     if char_prompt_val is not None:
         char_inline = (
-            char_prompt_val
-            if isinstance(char_prompt_val, str)
-            else ", ".join(str(x) for x in char_prompt_val if str(x).strip())
+            char_prompt_val if isinstance(char_prompt_val, str) else ", ".join(str(x) for x in char_prompt_val if str(x).strip())
         )
 
     # Common kwargs for every _run_generation call — extracted from the
@@ -1885,7 +1880,7 @@ def template(
         str | None,
         typer.Option(
             "--character-prompt",
-            help='Inline character fragment, comma-separated (merged with --character into `character`)',
+            help="Inline character fragment, comma-separated (merged with --character into `character`)",
         ),
     ] = None,
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Save template to file")] = None,
@@ -2528,7 +2523,7 @@ def character_list(
 
     if not names:
         console.print(f"[yellow]No characters saved in {CHARACTERS_DIR}.[/yellow]")
-        console.print("[dim]Create one with: tsr character save -o <name> \"elem1, elem2\"[/dim]")
+        console.print('[dim]Create one with: tsr character save -o <name> "elem1, elem2"[/dim]')
         return
 
     console.print(f"[bold]Characters[/bold] ({len(names)}) [dim]in {CHARACTERS_DIR}[/dim]")

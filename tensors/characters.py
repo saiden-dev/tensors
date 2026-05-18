@@ -31,9 +31,7 @@ _MIN_QUOTED_SCALAR_LEN = 2
 
 def _validate_name(name: str) -> None:
     if not name or not _NAME_RE.match(name):
-        raise ValueError(
-            f"Invalid character name {name!r}: only letters, digits, '.', '_', '-' allowed"
-        )
+        raise ValueError(f"Invalid character name {name!r}: only letters, digits, '.', '_', '-' allowed")
 
 
 def character_path(name: str) -> Path:
@@ -104,11 +102,7 @@ def load_character(name: str) -> list[str]:
             if not isinstance(value, str):
                 value = str(value)
         except json.JSONDecodeError:
-            value = (
-                item[1:-1].replace("''", "'")
-                if len(item) >= _MIN_QUOTED_SCALAR_LEN and item[0] == item[-1] == "'"
-                else item
-            )
+            value = item[1:-1].replace("''", "'") if len(item) >= _MIN_QUOTED_SCALAR_LEN and item[0] == item[-1] == "'" else item
         elements.append(value)
     return elements
 
