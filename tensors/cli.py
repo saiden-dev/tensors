@@ -346,7 +346,10 @@ def search(
         return
 
     key = api_key or load_api_key()
-    civitai_results: dict[str, Any] | None = None
+    # Reuse the name from the remote-mode branch above (which already returned)
+    # without redeclaring its type — mypy treats class-scope re-annotation as
+    # a no-redef even when control flow guarantees the branches don't overlap.
+    civitai_results = None
     hf_results: list[dict[str, Any]] | None = None
 
     # Search CivitAI
@@ -946,7 +949,9 @@ def generate(  # noqa: PLR0915
             {
                 p.name
                 for p in click_ctx.command.params
-                if click_ctx.get_parameter_source(p.name) == click.core.ParameterSource.COMMANDLINE
+                # click's Parameter.name is typed `str | None` in stubs but is always
+                # a real string at runtime for any param that's been registered.
+                if p.name is not None and click_ctx.get_parameter_source(p.name) == click.core.ParameterSource.COMMANDLINE
             }
             if hasattr(click_ctx, "get_parameter_source")
             else set()
@@ -1709,7 +1714,7 @@ _STYLE_SWEEP_TEMPLATE_KEYS = {
 }
 
 
-def _load_json_file_or_inline(value: str | list | dict, *, what: str) -> Any:
+def _load_json_file_or_inline(value: str | list[Any] | dict[str, Any], *, what: str) -> Any:
     """Load JSON from a file path or accept already-parsed inline data.
 
     `value` may be a path string, a JSON string, or an already-parsed list/dict
@@ -2188,14 +2193,16 @@ def style_sweep(  # noqa: PLR0915
 
 def _write_sweep_manifest(
     out_dir: Path,
-    template_path: Path,
+    template_path: Path | None,
     styles_origin: str,
     results: list[dict[str, Any]],
 ) -> Path:
     """Write the per-sweep manifest JSON. Returns the path."""
     manifest_path = out_dir / "_sweep.json"
     manifest: dict[str, Any] = {
-        "template": str(template_path),
+        # template_path is None when --list is used with only --styles (no template
+        # required). Serialize as empty string to keep manifest schema stable.
+        "template": str(template_path) if template_path is not None else "",
         "styles_source": styles_origin,
         "results": results,
     }
@@ -3628,8 +3635,10 @@ def comfy_generate(
 ) -> None:
     """[Deprecated] Use 'tsr generate' instead. All features have been merged into the top-level command."""
     console.print("[yellow]Warning: 'tsr comfy generate' is deprecated. Use 'tsr generate' instead.[/yellow]")
-    # Delegate to the unified generate command via context invocation
-    ctx = typer.Context(generate)
+    # Delegate to the unified generate command via context invocation.
+    # typer.Context expects a click.Command, but passing the typer function directly
+    # works at runtime via duck-typing — keeping it for back-compat with deprecated alias.
+    ctx = typer.Context(generate)  # type: ignore[arg-type]
     generate(
         ctx=ctx,
         prompt=prompt,
