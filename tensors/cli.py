@@ -788,6 +788,14 @@ def generate(  # noqa: PLR0915
         str | None,
         typer.Option("--character-prompt", help='Inline character fragment, comma-separated (e.g. "blond hair, blue eyes")'),
     ] = None,
+    scene: Annotated[
+        str | None,
+        typer.Option("-S", "--scene", help="Saved scene name (loaded from ~/.local/share/tensors/scenes/)"),
+    ] = None,
+    scene_prompt: Annotated[
+        str | None,
+        typer.Option("--scene-prompt", help='Inline scene fragment, comma-separated (e.g. "luxury penthouse, volumetric lighting")'),
+    ] = None,
     family: Annotated[
         str | None,
         typer.Option(
@@ -912,7 +920,20 @@ def generate(  # noqa: PLR0915
                 character_prompt = ", ".join(str(x) for x in val if str(x).strip())
         if "character_prompt" in mapped and "character_prompt" not in explicit:
             cp_val = mapped["character_prompt"]
-            character_prompt = cp_val if isinstance(cp_val, str) else ", ".join(str(x) for x in cp_val if str(x).strip())
+            character_prompt = (
+                cp_val if isinstance(cp_val, str) else ", ".join(str(x) for x in cp_val if str(x).strip())
+            )
+        if "scene" in mapped and "scene" not in explicit:
+            sv = mapped["scene"]
+            if isinstance(sv, str):
+                scene = sv
+            elif isinstance(sv, (list, tuple)):
+                scene_prompt = ", ".join(str(x) for x in sv if str(x).strip())
+        if "scene_prompt" in mapped and "scene_prompt" not in explicit:
+            sp_val = mapped["scene_prompt"]
+            scene_prompt = (
+                sp_val if isinstance(sp_val, str) else ", ".join(str(x) for x in sp_val if str(x).strip())
+            )
         if "rating" in mapped and "rating" not in explicit:
             rating = mapped["rating"]
 
@@ -942,6 +963,8 @@ def generate(  # noqa: PLR0915
         no_negative=no_negative,
         character=character,
         character_prompt=character_prompt,
+        scene=scene,
+        scene_prompt=scene_prompt,
         family=family,
         output=output,
         remote=remote,
@@ -1032,6 +1055,8 @@ def _run_generation(  # noqa: PLR0915
     no_negative: bool = False,
     character: str | None = None,
     character_prompt: str | None = None,
+    scene: str | None = None,
+    scene_prompt: str | None = None,
     family: str | None = None,
     output: Path | None = None,
     remote: str | None = None,
@@ -1103,6 +1128,31 @@ def _run_generation(  # noqa: PLR0915
                 origin = f"'{character}'" if character else "inline"
                 console.print(
                     f"[dim]Character ({origin}, {len(character_elements)} elements): {', '.join(character_elements)}[/dim]"
+                )
+
+    # Resolve scene (named lookup + inline --scene-prompt, merged + deduped).
+    # Scene sits between character (who) and rating/user prompt (what's happening)
+    # so the natural reading order is: quality → character → scene → rating → user.
+    scene_elements: list[str] = []
+    if scene or scene_prompt:
+        from tensors.scenes import resolve_scene  # noqa: PLC0415
+
+        try:
+            scene_elements = resolve_scene(scene=scene, scene_prompt=scene_prompt)
+        except FileNotFoundError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+
+        if scene_elements:
+            prompt_parts.extend(scene_elements)
+            if not json_output:
+                origin = f"'{scene}'" if scene else "inline"
+                console.print(
+                    f"[dim]Scene ({origin}, {len(scene_elements)} elements): "
+                    f"{', '.join(scene_elements)}[/dim]"
                 )
 
     # Add rating tag based on model family (Pony/Illustrious)
@@ -1350,6 +1400,8 @@ _STYLE_SWEEP_TEMPLATE_KEYS = {
     "no_negative",
     "character",
     "character_prompt",
+    "scene",
+    "scene_prompt",
     "rating",
     "family",
     "remote",
@@ -1680,22 +1732,27 @@ def style_sweep(  # noqa: PLR0915
 
         pending_tasks.append((i, entry, result, out_path))
 
-    # Character resolution: templates may carry either a name string (look up
-    # at run-time) or an inline list of resolved elements (e.g. produced by
-    # `tsr template -C ...`). Lists are joined into `character_prompt` so
-    # _run_generation sees a uniform CSV string and skips the disk lookup.
-    char_val = tpl_data.get("character")
-    char_prompt_val = tpl_data.get("character_prompt")
-    char_name: str | None = None
-    char_inline: str | None = None
-    if isinstance(char_val, str):
-        char_name = char_val
-    elif isinstance(char_val, (list, tuple)):
-        char_inline = ", ".join(str(x) for x in char_val if str(x).strip())
-    if char_prompt_val is not None:
-        char_inline = (
-            char_prompt_val if isinstance(char_prompt_val, str) else ", ".join(str(x) for x in char_prompt_val if str(x).strip())
-        )
+    # Character / scene resolution: templates may carry either a name string
+    # (look up at run-time) or an inline list of resolved elements (e.g. produced
+    # by `tsr template -C ... -S ...`). Lists are joined into the *_prompt arg
+    # so _run_generation sees a uniform CSV string and skips the disk lookup.
+    def _split_fragment(name_val: Any, prompt_val: Any) -> tuple[str | None, str | None]:
+        name_out: str | None = None
+        inline_out: str | None = None
+        if isinstance(name_val, str):
+            name_out = name_val
+        elif isinstance(name_val, (list, tuple)):
+            inline_out = ", ".join(str(x) for x in name_val if str(x).strip())
+        if prompt_val is not None:
+            inline_out = (
+                prompt_val
+                if isinstance(prompt_val, str)
+                else ", ".join(str(x) for x in prompt_val if str(x).strip())
+            )
+        return name_out, inline_out
+
+    char_name, char_inline = _split_fragment(tpl_data.get("character"), tpl_data.get("character_prompt"))
+    scene_name, scene_inline = _split_fragment(tpl_data.get("scene"), tpl_data.get("scene_prompt"))
 
     # Common kwargs for every _run_generation call — extracted from the
     # template once, reused across sequential and parallel paths.
@@ -1720,6 +1777,8 @@ def style_sweep(  # noqa: PLR0915
         "no_negative": bool(_t("no_negative", default=False)),
         "character": char_name,
         "character_prompt": char_inline,
+        "scene": scene_name,
+        "scene_prompt": scene_inline,
         "family": _t("family"),
         "remote": gen_remote,
         "json_output": False,
@@ -1883,6 +1942,17 @@ def template(
             help="Inline character fragment, comma-separated (merged with --character into `character`)",
         ),
     ] = None,
+    scene: Annotated[
+        str | None,
+        typer.Option("-S", "--scene", help="Saved scene name (resolved into the `scene` list field)"),
+    ] = None,
+    scene_prompt: Annotated[
+        str | None,
+        typer.Option(
+            "--scene-prompt",
+            help='Inline scene fragment, comma-separated (merged with --scene into `scene`)',
+        ),
+    ] = None,
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Save template to file")] = None,
 ) -> None:
     """Dump a JSON generation template with resolved defaults for a model.
@@ -1890,17 +1960,18 @@ def template(
     Outputs a ready-to-use JSON object with all parameters auto-resolved from the
     checkpoint family. Pipe to 'tsr generate --input' or save to a file for reuse.
 
-    ``--character`` and ``--character-prompt`` append a ``character`` list to the
-    template (saved-name elements first, inline elements appended, deduped).
+    ``--character`` / ``--character-prompt`` append a ``character`` list to the
+    template; ``--scene`` / ``--scene-prompt`` append a ``scene`` list (named
+    elements first, inline elements appended, deduped within each list).
 
     Examples:
         tsr template -m ponyDiffusionV6XL_v6StartWithThisOne.safetensors
         tsr template -m beautifulRealistic_v7.safetensors -O portrait
         tsr template -m waiIllustriousSDXL_v160.safetensors -l "Elvira iIlluLoRA.safetensors"
         tsr template -m ponyRealism_V22.safetensors -o pony_preset.json
-        tsr template -m flux1-dev.safetensors -C cassie_cage  # embeds saved character
-        tsr template -m flux1-dev.safetensors --character-prompt "blond hair, blue eyes"
-        tsr template -m flux1-dev.safetensors -C cassie --character-prompt "wet skin"
+        tsr template -m flux1-dev.safetensors -C cassie_cage -S penthouse
+        tsr template -m flux1-dev.safetensors --character-prompt "blond hair, blue eyes" \\
+            --scene-prompt "luxury penthouse, volumetric lighting, Canon R5"
         tsr generate --input "$(tsr template -m ponyRealism_V22.safetensors)" "a portrait"
     """
     from tensors.config import get_model_generation_defaults, resolve_orientation  # noqa: PLC0415
@@ -1954,11 +2025,10 @@ def template(
         tpl["lora"] = lora
         tpl["lora_strength"] = lora_strength
 
-    # Resolve character into a flat list embedded in the template. When the
-    # template is later fed to `tsr generate --input`, _run_generation will
-    # treat a list under `character` as inline elements (no re-lookup needed).
-    # --character and --character-prompt merge in that order (named first,
-    # inline appended, duplicates dropped).
+    # Resolve character / scene into flat lists embedded in the template. When
+    # the template is later fed to `tsr generate --input`, _run_generation will
+    # treat the lists under `character` / `scene` as inline elements (no
+    # re-lookup needed). The `_*_name` fields are informational only.
     if character or character_prompt:
         from tensors.characters import resolve_character  # noqa: PLC0415
 
@@ -1975,6 +2045,23 @@ def template(
             tpl["character"] = resolved
             if character:
                 tpl["_character_name"] = character
+
+    if scene or scene_prompt:
+        from tensors.scenes import resolve_scene  # noqa: PLC0415
+
+        try:
+            resolved_scene = resolve_scene(scene=scene, scene_prompt=scene_prompt)
+        except FileNotFoundError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+        except ValueError as e:
+            console.print(f"[red]{e}[/red]")
+            raise typer.Exit(1) from e
+
+        if resolved_scene:
+            tpl["scene"] = resolved_scene
+            if scene:
+                tpl["_scene_name"] = scene
 
     # Add metadata (not used by generate, but informational)
     tpl["_family"] = family or "unknown"
@@ -2460,12 +2547,19 @@ def hf_download(
 
 
 # =============================================================================
-# Character Commands
+# Fragment Commands (character + scene)
 # =============================================================================
-# Characters are named, comma-split prompt fragments stored as YAML lists in
-# ~/.local/share/tensors/characters/<name>.yml. They are injected into the
-# positive prompt by `tsr generate --character <name>` (or inline via
-# `--character-prompt "elem1, elem2"`).
+# Characters and scenes are named, comma-split prompt fragments stored as YAML
+# lists in ~/.local/share/tensors/<kind>/<name>.yml. They are injected into the
+# positive prompt by `tsr generate --character <name>` / `--scene <name>` (or
+# inline via `--character-prompt "..."` / `--scene-prompt`).
+#
+# Both subcommand groups share the underlying tensors.fragments.FragmentLibrary,
+# but the CLI commands are spelled out per-kind to keep Typer's signature
+# introspection happy under `from __future__ import annotations` (closures
+# referencing per-kind labels break typer's eval_str=True resolution).
+
+# ---- character ----
 
 character_app = typer.Typer(
     name="character",
@@ -2501,7 +2595,7 @@ def character_save(
         raise typer.Exit(1) from e
 
     if json_output:
-        console.print_json(data={"name": name, "path": str(path), "elements": parsed})
+        console.print_json(data={"name": name, "path": str(path), "elements": parsed, "kind": "characters"})
         return
 
     console.print(f"[green]Saved character '{name}' ({len(parsed)} elements):[/green] {path}")
@@ -2579,6 +2673,126 @@ def character_delete(
         console.print(f"[green]Deleted character '{name}'[/green]")
     else:
         console.print(f"[yellow]Character '{name}' does not exist[/yellow]")
+        raise typer.Exit(1)
+
+
+# ---- scene ----
+
+scene_app = typer.Typer(
+    name="scene",
+    help="Manage saved scene prompts (~/.local/share/tensors/scenes/).",
+    no_args_is_help=True,
+)
+app.add_typer(scene_app)
+
+
+@scene_app.command("save")
+def scene_save(
+    elements: Annotated[
+        str, typer.Argument(help='Comma-separated prompt elements (e.g. "luxury penthouse, volumetric lighting")')
+    ],
+    name: Annotated[str, typer.Option("-o", "--output", help="Scene name (used as filename)")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Save a scene as a YAML list of prompt elements.
+
+    Examples:
+        tsr scene save -o penthouse "luxury penthouse, volumetric lighting, Canon R5, 85mm"
+        tsr scene save -o forest "deep forest, dappled sunlight, moss-covered rocks"
+    """
+    from tensors.fragments import parse_elements  # noqa: PLC0415
+    from tensors.scenes import save_scene  # noqa: PLC0415
+
+    parsed = parse_elements(elements)
+    if not parsed:
+        console.print("[red]No usable elements after splitting on commas[/red]")
+        raise typer.Exit(1)
+
+    try:
+        path = save_scene(name, parsed)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"name": name, "path": str(path), "elements": parsed, "kind": "scenes"})
+        return
+
+    console.print(f"[green]Saved scene '{name}' ({len(parsed)} elements):[/green] {path}")
+    for elem in parsed:
+        console.print(f"  • {elem}")
+
+
+@scene_app.command("list")
+def scene_list(
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """List saved scenes."""
+    from tensors.scenes import SCENES_DIR, list_scenes  # noqa: PLC0415
+
+    names = list_scenes()
+    if json_output:
+        console.print_json(data={"dir": str(SCENES_DIR), "scenes": names})
+        return
+
+    if not names:
+        console.print(f"[yellow]No scenes saved in {SCENES_DIR}.[/yellow]")
+        console.print('[dim]Create one with: tsr scene save -o <name> "elem1, elem2"[/dim]')
+        return
+
+    console.print(f"[bold]Scenes[/bold] ({len(names)}) [dim]in {SCENES_DIR}[/dim]")
+    for n in names:
+        console.print(f"  • {n}")
+
+
+@scene_app.command("show")
+def scene_show(
+    name: Annotated[str, typer.Argument(help="Scene name")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Show a scene's elements."""
+    from tensors.scenes import load_scene, scene_path  # noqa: PLC0415
+
+    try:
+        elements = load_scene(name)
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"name": name, "path": str(scene_path(name)), "elements": elements})
+        return
+
+    console.print(f"[bold]{name}[/bold] [dim]({scene_path(name)})[/dim]")
+    for elem in elements:
+        console.print(f"  • {elem}")
+
+
+@scene_app.command("delete")
+def scene_delete(
+    name: Annotated[str, typer.Argument(help="Scene name")],
+    json_output: Annotated[bool, typer.Option("--json", "-j", help="Output as JSON")] = False,
+) -> None:
+    """Delete a saved scene."""
+    from tensors.scenes import delete_scene  # noqa: PLC0415
+
+    try:
+        deleted = delete_scene(name)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1) from e
+
+    if json_output:
+        console.print_json(data={"name": name, "deleted": deleted})
+        return
+
+    if deleted:
+        console.print(f"[green]Deleted scene '{name}'[/green]")
+    else:
+        console.print(f"[yellow]Scene '{name}' does not exist[/yellow]")
         raise typer.Exit(1)
 
 
