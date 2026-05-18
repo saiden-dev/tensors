@@ -55,9 +55,7 @@ class FragmentLibrary:
 
     def _validate_name(self, name: str) -> None:
         if not name or not _NAME_RE.match(name):
-            raise ValueError(
-                f"Invalid {self._singular} name {name!r}: only letters, digits, '.', '_', '-' allowed"
-            )
+            raise ValueError(f"Invalid {self._singular} name {name!r}: only letters, digits, '.', '_', '-' allowed")
 
     def path(self, name: str) -> Path:
         """Return the on-disk path for ``name`` (without ensuring it exists)."""
@@ -108,9 +106,7 @@ class FragmentLibrary:
                     value = str(value)
             except json.JSONDecodeError:
                 value = (
-                    item[1:-1].replace("''", "'")
-                    if len(item) >= _MIN_QUOTED_SCALAR_LEN and item[0] == item[-1] == "'"
-                    else item
+                    item[1:-1].replace("''", "'") if len(item) >= _MIN_QUOTED_SCALAR_LEN and item[0] == item[-1] == "'" else item
                 )
             elements.append(value)
         return elements

@@ -794,7 +794,9 @@ def generate(  # noqa: PLR0915
     ] = None,
     scene_prompt: Annotated[
         str | None,
-        typer.Option("--scene-prompt", help='Inline scene fragment, comma-separated (e.g. "luxury penthouse, volumetric lighting")'),
+        typer.Option(
+            "--scene-prompt", help='Inline scene fragment, comma-separated (e.g. "luxury penthouse, volumetric lighting")'
+        ),
     ] = None,
     family: Annotated[
         str | None,
@@ -920,9 +922,7 @@ def generate(  # noqa: PLR0915
                 character_prompt = ", ".join(str(x) for x in val if str(x).strip())
         if "character_prompt" in mapped and "character_prompt" not in explicit:
             cp_val = mapped["character_prompt"]
-            character_prompt = (
-                cp_val if isinstance(cp_val, str) else ", ".join(str(x) for x in cp_val if str(x).strip())
-            )
+            character_prompt = cp_val if isinstance(cp_val, str) else ", ".join(str(x) for x in cp_val if str(x).strip())
         if "scene" in mapped and "scene" not in explicit:
             sv = mapped["scene"]
             if isinstance(sv, str):
@@ -931,9 +931,7 @@ def generate(  # noqa: PLR0915
                 scene_prompt = ", ".join(str(x) for x in sv if str(x).strip())
         if "scene_prompt" in mapped and "scene_prompt" not in explicit:
             sp_val = mapped["scene_prompt"]
-            scene_prompt = (
-                sp_val if isinstance(sp_val, str) else ", ".join(str(x) for x in sp_val if str(x).strip())
-            )
+            scene_prompt = sp_val if isinstance(sp_val, str) else ", ".join(str(x) for x in sp_val if str(x).strip())
         if "rating" in mapped and "rating" not in explicit:
             rating = mapped["rating"]
 
@@ -1150,10 +1148,7 @@ def _run_generation(  # noqa: PLR0915
             prompt_parts.extend(scene_elements)
             if not json_output:
                 origin = f"'{scene}'" if scene else "inline"
-                console.print(
-                    f"[dim]Scene ({origin}, {len(scene_elements)} elements): "
-                    f"{', '.join(scene_elements)}[/dim]"
-                )
+                console.print(f"[dim]Scene ({origin}, {len(scene_elements)} elements): {', '.join(scene_elements)}[/dim]")
 
     # Add rating tag based on model family (Pony/Illustrious)
     if rating:
@@ -1744,11 +1739,7 @@ def style_sweep(  # noqa: PLR0915
         elif isinstance(name_val, (list, tuple)):
             inline_out = ", ".join(str(x) for x in name_val if str(x).strip())
         if prompt_val is not None:
-            inline_out = (
-                prompt_val
-                if isinstance(prompt_val, str)
-                else ", ".join(str(x) for x in prompt_val if str(x).strip())
-            )
+            inline_out = prompt_val if isinstance(prompt_val, str) else ", ".join(str(x) for x in prompt_val if str(x).strip())
         return name_out, inline_out
 
     char_name, char_inline = _split_fragment(tpl_data.get("character"), tpl_data.get("character_prompt"))
@@ -1950,7 +1941,7 @@ def template(
         str | None,
         typer.Option(
             "--scene-prompt",
-            help='Inline scene fragment, comma-separated (merged with --scene into `scene`)',
+            help="Inline scene fragment, comma-separated (merged with --scene into `scene`)",
         ),
     ] = None,
     output: Annotated[Path | None, typer.Option("-o", "--output", help="Save template to file")] = None,
