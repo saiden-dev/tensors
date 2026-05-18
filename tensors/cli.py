@@ -29,6 +29,7 @@ from tensors.config import (
     COMFYUI_DEFAULT_WIDTH,
     CONFIG_FILE,
     MODEL_FAMILY_DEFAULTS,
+    VALID_PATH_TYPES,
     BaseModel,
     CommercialUse,
     ModelType,
@@ -673,10 +674,9 @@ def config(
 
         path_type, path_value = set_path.split("=", 1)
         path_type = path_type.lower().strip()
-        valid_types = ["checkpoints", "loras", "embeddings", "vae", "controlnet", "upscalers", "other"]
 
-        if path_type not in valid_types:
-            console.print(f"[red]Error: Invalid type '{path_type}'. Valid: {', '.join(valid_types)}[/red]")
+        if path_type not in VALID_PATH_TYPES:
+            console.print(f"[red]Error: Invalid type '{path_type}'. Valid: {', '.join(VALID_PATH_TYPES)}[/red]")
             raise typer.Exit(1)
 
         cfg = load_config()
@@ -713,10 +713,7 @@ def config(
         configured_paths = cfg.get("paths", {})
 
         for path_str, types in sorted(shown_paths.items(), key=lambda x: x[0]):
-            is_custom = any(
-                path_str == configured_paths.get(k)
-                for k in ["checkpoints", "loras", "embeddings", "vae", "controlnet", "upscalers", "other"]
-            )
+            is_custom = any(path_str == configured_paths.get(k) for k in VALID_PATH_TYPES)
             marker = " [green](custom)[/green]" if is_custom else " [dim](default)[/dim]"
             console.print(f"  {', '.join(sorted(types))}: {path_str}{marker}")
 

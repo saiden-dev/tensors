@@ -26,6 +26,11 @@ GALLERY_DIR = DATA_DIR / "gallery"
 LEGACY_RC_FILE = Path.home() / ".sftrc"
 
 # Default download paths by model type (can be overridden in config.toml [paths])
+#
+# Note: "DiffusionModel" is not an official CivitAI model_type — CivitAI lumps
+# UNet-only files (e.g. Flux UNet released separately from CLIP+VAE) under
+# "Checkpoint". The DiffusionModel entry here exists so users can register a
+# ComfyUI `diffusion_models/` path and target it manually via `tsr dl -o`.
 DEFAULT_PATHS: dict[str, Path] = {
     "Checkpoint": MODELS_DIR / "checkpoints",
     "LORA": MODELS_DIR / "loras",
@@ -34,8 +39,22 @@ DEFAULT_PATHS: dict[str, Path] = {
     "VAE": MODELS_DIR / "vae",
     "Controlnet": MODELS_DIR / "controlnet",
     "Upscaler": MODELS_DIR / "upscalers",
+    "DiffusionModel": MODELS_DIR / "diffusion_models",
     "Other": MODELS_DIR / "other",
 }
+
+# Config-file keys accepted by `tsr config --set-path KEY=PATH`. Single source
+# of truth shared between the CLI validator and the display-marker logic.
+VALID_PATH_TYPES: list[str] = [
+    "checkpoints",
+    "loras",
+    "embeddings",
+    "vae",
+    "controlnet",
+    "upscalers",
+    "diffusion_models",
+    "other",
+]
 
 CIVITAI_API_BASE = "https://civitai.com/api/v1"
 CIVITAI_DOWNLOAD_BASE = "https://civitai.com/api/download/models"
@@ -297,7 +316,8 @@ def get_model_paths() -> dict[str, Path]:
     config = load_config()
     paths_config = config.get("paths", {})
 
-    # Map config keys to CivitAI model types
+    # Map config keys to CivitAI model types. "diffusion_models" maps to the
+    # synthetic "DiffusionModel" bucket (see DEFAULT_PATHS for rationale).
     key_to_types = {
         "checkpoints": ["Checkpoint"],
         "loras": ["LORA", "LoCon"],
@@ -305,6 +325,7 @@ def get_model_paths() -> dict[str, Path]:
         "vae": ["VAE"],
         "controlnet": ["Controlnet"],
         "upscalers": ["Upscaler"],
+        "diffusion_models": ["DiffusionModel"],
         "other": ["Other"],
     }
 
