@@ -346,7 +346,10 @@ def search(
         return
 
     key = api_key or load_api_key()
-    civitai_results: dict[str, Any] | None = None
+    # Reuse the name from the remote-mode branch above (which already returned)
+    # without redeclaring its type — mypy treats class-scope re-annotation as
+    # a no-redef even when control flow guarantees the branches don't overlap.
+    civitai_results = None
     hf_results: list[dict[str, Any]] | None = None
 
     # Search CivitAI
@@ -874,6 +877,22 @@ def generate(  # noqa: PLR0915
         str | None,
         typer.Option("--input", "-I", help="JSON or YAML params (file path or inline; keys match CLI options)"),
     ] = None,
+    parallel_queue: Annotated[
+        int,
+        typer.Option(
+            "--parallel-queue",
+            "-P",
+            help=(
+                "Concurrent ComfyUI submissions (default 1). When >1 with --count N, "
+                "splits the request into N independent jobs (batch_size=1 each) with "
+                "incrementing seeds, executed P-at-a-time via thread pool. The GPU "
+                "still processes one prompt at a time, but HTTP queue / init / "
+                "download phases pipeline for a ~5-15%% speedup. Per-task output "
+                "interleaves; final summary lists all saved files. Ignored when "
+                "--count is 1."
+            ),
+        ),
+    ] = 1,
 ) -> None:
     """Generate an image using text-to-image.
 
@@ -887,6 +906,11 @@ def generate(  # noqa: PLR0915
     starting with ``{`` are JSON, everything else is YAML. CLI flags override
     --input values.
 
+    With --count > 1, images are generated as a single ComfyUI batch by default
+    (one workflow, sequential on GPU). Use --parallel-queue N to instead split
+    into N independent batch_size=1 jobs queued in parallel, each with its own
+    seed — useful for overlapping the HTTP/download phase across requests.
+
     Examples:
         tsr generate "a cat on a windowsill"
         tsr generate "portrait photo" -m ponyDiffusionV6XL_v6.safetensors -O portrait
@@ -895,7 +919,20 @@ def generate(  # noqa: PLR0915
         tsr generate --input '{"prompt": "a mech", "model": "flux1-dev-fp8.safetensors"}'
         tsr generate --input scene.yml
         tsr generate "raw prompt" --no-quality --no-negative
+        tsr generate "city" -c 8 -P 4 -o out.png   # 8 distinct seeds, 4 in flight
     """
+    if parallel_queue < 1:
+        console.print("[red]--parallel-queue must be >= 1[/red]")
+        raise typer.Exit(1)
+    if parallel_queue > 1 and json_output:
+        # _run_generation short-circuits the disk-save when json_output=True
+        # (it dumps JSON and returns). For the parallel fanout to actually save
+        # files, each task must take the non-JSON path. We render our own JSON
+        # at the end, so the per-task --json is incompatible.
+        console.print(
+            "[red]--json is not supported with --parallel-queue > 1 (would skip the file-save step). Drop one or the other.[/red]"
+        )
+        raise typer.Exit(1)
     # ---- --input merging (JSON or YAML) ----
     if json_input is not None:
         ji = _parse_generate_input(json_input)
@@ -912,7 +949,9 @@ def generate(  # noqa: PLR0915
             {
                 p.name
                 for p in click_ctx.command.params
-                if click_ctx.get_parameter_source(p.name) == click.core.ParameterSource.COMMANDLINE
+                # click's Parameter.name is typed `str | None` in stubs but is always
+                # a real string at runtime for any param that's been registered.
+                if p.name is not None and click_ctx.get_parameter_source(p.name) == click.core.ParameterSource.COMMANDLINE
             }
             if hasattr(click_ctx, "get_parameter_source")
             else set()
@@ -981,41 +1020,209 @@ def generate(  # noqa: PLR0915
             scene_prompt = sp_val if isinstance(sp_val, str) else ", ".join(str(x) for x in sp_val if str(x).strip())
         if "rating" in mapped and "rating" not in explicit:
             rating = mapped["rating"]
+        if "parallel_queue" in mapped and "parallel_queue" not in explicit:
+            parallel_queue = int(mapped["parallel_queue"])
 
     has_content = bool(prompt or character or character_prompt or scene or scene_prompt)
     if not has_content:
         console.print("[red]Prompt (or character/scene) is required[/red]")
         raise typer.Exit(1)
 
-    _run_generation(
-        prompt=prompt,
-        model=model,
-        width=width,
-        height=height,
-        steps=steps,
-        cfg=cfg,
-        guidance=guidance,
-        seed=seed,
-        sampler=sampler,
-        scheduler=scheduler,
-        vae=vae,
-        orientation=orientation,
-        lora=lora,
-        lora_strength=lora_strength,
-        negative=negative,
-        count=count,
-        rating=rating,
-        no_quality=no_quality,
-        no_negative=no_negative,
-        character=character,
-        character_prompt=character_prompt,
-        scene=scene,
-        scene_prompt=scene_prompt,
-        family=family,
-        output=output,
-        remote=remote,
-        json_output=json_output,
-    )
+    # Effective parallelism is bounded by count — running 4 threads for 1 image
+    # is silly. count=1 always goes through the sequential path regardless of -P.
+    effective_parallel = min(parallel_queue, count) if count > 1 else 1
+
+    if effective_parallel <= 1:
+        # Sequential path: single _run_generation call with batch_size=count.
+        # Unchanged from pre-parallel behavior — preserves existing output naming,
+        # JSON shape, and log lines exactly.
+        _run_generation(
+            prompt=prompt,
+            model=model,
+            width=width,
+            height=height,
+            steps=steps,
+            cfg=cfg,
+            guidance=guidance,
+            seed=seed,
+            sampler=sampler,
+            scheduler=scheduler,
+            vae=vae,
+            orientation=orientation,
+            lora=lora,
+            lora_strength=lora_strength,
+            negative=negative,
+            count=count,
+            rating=rating,
+            no_quality=no_quality,
+            no_negative=no_negative,
+            character=character,
+            character_prompt=character_prompt,
+            scene=scene,
+            scene_prompt=scene_prompt,
+            family=family,
+            output=output,
+            remote=remote,
+            json_output=json_output,
+        )
+        return
+
+    # ---- Parallel fanout path ----
+    # Split count into `count` independent jobs (batch_size=1), executed
+    # `effective_parallel` at a time. Each job gets a distinct seed and a
+    # distinct output path so writes don't clobber each other.
+    import random as _rng  # noqa: PLC0415
+    import time as _time  # noqa: PLC0415
+    from concurrent.futures import ThreadPoolExecutor, as_completed  # noqa: PLC0415
+
+    # Resolve bare model/lora names ONCE in the parent before fanout. Each
+    # parallel _run_generation call silences its own console (json_output=True)
+    # which also skips the validation/resolution step in that path. Doing it
+    # here means each task receives a canonical filename and ComfyUI's strict
+    # loaders accept the request first try.
+    if model and not remote:
+        # Detect family for the right loader bucket (checkpoints vs diffusion_models).
+        # Mirrors the lookup _run_generation does on entry.
+        from tensors.db import Database  # noqa: PLC0415
+
+        _base_model: str | None = None
+        try:
+            with Database() as _db:
+                _db.init_schema()
+                _base_model = _db.get_base_model_by_filename(model)
+        except Exception:
+            pass
+        _detected = detect_model_family(model, _base_model)
+        _fam = family or _detected
+        try:
+            model, lora = _validate_model_available(model, _fam, lora)
+        except typer.Exit:
+            raise  # surface the same error path as sequential
+
+    # Seed strategy:
+    #   --seed >= 0 → use as base, increment per job (reproducible series)
+    #   --seed == -1 → pick a fresh random seed PER JOB so parallel runs aren't
+    #                  accidentally correlated (each thread gets variety)
+    seeds = [seed + i for i in range(count)] if seed >= 0 else [_rng.randint(0, 2**32 - 1) for _ in range(count)]
+
+    # Output paths: mirror the existing `count > 1` naming convention from
+    # _run_generation (stem_NNN.ext). When --output is omitted, leave per-task
+    # output as None — _run_generation will skip the disk write and the user
+    # gets only the console listing of generated image refs.
+    out_paths: list[Path | None] = []
+    for i in range(count):
+        if output is None:
+            out_paths.append(None)
+        else:
+            out_paths.append(output.parent / f"{output.stem}_{i + 1:03d}{output.suffix}")
+
+    if not json_output:
+        console.print(
+            f"[dim]Parallel queue: {effective_parallel} concurrent submissions x {count} images (output may interleave)[/dim]"
+        )
+
+    common_kwargs: dict[str, Any] = {
+        "prompt": prompt,
+        "model": model,
+        "width": width,
+        "height": height,
+        "steps": steps,
+        "cfg": cfg,
+        "guidance": guidance,
+        "sampler": sampler,
+        "scheduler": scheduler,
+        "vae": vae,
+        "orientation": orientation,
+        "lora": lora,
+        "lora_strength": lora_strength,
+        "negative": negative,
+        "count": 1,  # each task generates exactly one image
+        "rating": rating,
+        "no_quality": no_quality,
+        "no_negative": no_negative,
+        "character": character,
+        "character_prompt": character_prompt,
+        "scene": scene,
+        "scene_prompt": scene_prompt,
+        "family": family,
+        "remote": remote,
+        # NOTE: json_output stays False so _run_generation's disk-save path runs.
+        # Setting True would short-circuit before saving files. Per-task console
+        # chatter is the trade-off; the final summary still shows clean per-task
+        # status lines.
+        "json_output": False,
+    }
+
+    def _run_one(idx: int) -> dict[str, Any]:
+        """Run a single batch_size=1 job. Returns a result dict (success captured)."""
+        start = _time.perf_counter()
+        result: dict[str, Any] = {
+            "index": idx,
+            "seed": seeds[idx],
+            "output": str(out_paths[idx]) if out_paths[idx] is not None else None,
+            "duration_sec": 0.0,
+            "success": False,
+            "error": None,
+        }
+        try:
+            _run_generation(seed=seeds[idx], output=out_paths[idx], **common_kwargs)
+            result["duration_sec"] = round(_time.perf_counter() - start, 2)
+            result["success"] = True
+        except typer.Exit as ex:
+            result["duration_sec"] = round(_time.perf_counter() - start, 2)
+            result["error"] = f"generate exited with code {ex.exit_code}"
+        except Exception as ex:
+            result["duration_sec"] = round(_time.perf_counter() - start, 2)
+            result["error"] = str(ex)
+        return result
+
+    fan_results: list[dict[str, Any]] = []
+    with ThreadPoolExecutor(max_workers=effective_parallel) as pool:
+        futures = {pool.submit(_run_one, i): i for i in range(count)}
+        for completed, fut in enumerate(as_completed(futures), start=1):
+            try:
+                res = fut.result()
+            except Exception as ex:
+                # Defensive — _run_one already swallows, but if the executor itself
+                # raises (e.g. pickling failure) we still want a well-formed result
+                # in the manifest rather than a crash.
+                res = {
+                    "index": futures[fut],
+                    "seed": seeds[futures[fut]],
+                    "output": str(out_paths[futures[fut]]) if out_paths[futures[fut]] is not None else None,
+                    "duration_sec": 0.0,
+                    "success": False,
+                    "error": f"executor exception: {ex}",
+                }
+            fan_results.append(res)
+            if not json_output:
+                if res["success"]:
+                    where = res["output"] or "(no --output set)"
+                    console.print(
+                        f"[green]\\[{completed}/{count}] seed={res['seed']} ok in {res['duration_sec']:.1f}s → {where}[/green]"
+                    )
+                else:
+                    console.print(f"[red]\\[{completed}/{count}] seed={res['seed']} FAIL: {res['error']}[/red]")
+
+    # Reorder by original index so JSON output / final summary list is stable.
+    fan_results.sort(key=lambda r: r["index"])
+    successful = sum(1 for r in fan_results if r["success"])
+
+    if json_output:
+        console.print_json(
+            data={
+                "success": successful == count,
+                "count": count,
+                "parallel_queue": effective_parallel,
+                "results": fan_results,
+            }
+        )
+        return
+
+    console.print("[bold green]Generation complete![/bold green]")
+    console.print(f"[dim]Generated {successful}/{count} images at parallelism={effective_parallel}[/dim]")
+    if successful < count:
+        raise typer.Exit(1)
 
 
 # Map model family → which ComfyUI loader directory the checkpoint must live in.
@@ -1283,7 +1490,7 @@ def _run_generation(  # noqa: PLR0915
 
     # ---- Resolve preset defaults for None params (both remote and local need these) ----
     from tensors.config import resolve_orientation  # noqa: PLC0415
-    from tensors.config import resolve_remote as do_resolve_remote
+    from tensors.config import resolve_remote as do_resolve_remote  # noqa: PLC0415
 
     # Use already-detected family_defaults from DB lookup above (not filename guessing)
     if family_defaults:
@@ -1507,7 +1714,7 @@ _STYLE_SWEEP_TEMPLATE_KEYS = {
 }
 
 
-def _load_json_file_or_inline(value: str | list | dict, *, what: str) -> Any:
+def _load_json_file_or_inline(value: str | list[Any] | dict[str, Any], *, what: str) -> Any:
     """Load JSON from a file path or accept already-parsed inline data.
 
     `value` may be a path string, a JSON string, or an already-parsed list/dict
@@ -1885,7 +2092,7 @@ def style_sweep(  # noqa: PLR0915
 
     def _run_one(task: tuple[int, dict[str, str], dict[str, Any], Path]) -> dict[str, Any]:
         """Run a single style. Returns the result dict (success or error captured)."""
-        idx, entry_in, res, opath = task
+        _idx, _entry_in, res, opath = task
         composed = res["prompt"]
         start = time.perf_counter()
         try:
@@ -1937,11 +2144,9 @@ def style_sweep(  # noqa: PLR0915
 
         with ThreadPoolExecutor(max_workers=parallel_queue) as pool:
             futures = {pool.submit(_run_one, task): task for task in pending_tasks}
-            completed = 0
-            for fut in as_completed(futures):
-                completed += 1
+            for completed, fut in enumerate(as_completed(futures), start=1):
                 task = futures[fut]
-                idx, _entry, _res, _out_path = task
+                idx, _entry, _res, _out_path = task  # idx used in log message below
                 try:
                     res = fut.result()
                 except Exception as ex:
@@ -1988,14 +2193,16 @@ def style_sweep(  # noqa: PLR0915
 
 def _write_sweep_manifest(
     out_dir: Path,
-    template_path: Path,
+    template_path: Path | None,
     styles_origin: str,
     results: list[dict[str, Any]],
 ) -> Path:
     """Write the per-sweep manifest JSON. Returns the path."""
     manifest_path = out_dir / "_sweep.json"
     manifest: dict[str, Any] = {
-        "template": str(template_path),
+        # template_path is None when --list is used with only --styles (no template
+        # required). Serialize as empty string to keep manifest schema stable.
+        "template": str(template_path) if template_path is not None else "",
         "styles_source": styles_origin,
         "results": results,
     }
@@ -2024,7 +2231,7 @@ def _print_styles_list(styles_origin: str, entries: list[dict[str, str]]) -> Non
 
 
 @app.command()
-def template(
+def template(  # noqa: PLR0915
     model: Annotated[str, typer.Option("-m", "--model", help="Checkpoint model name")],
     lora: Annotated[str | None, typer.Option("-l", "--lora", help="LoRA model name")] = None,
     lora_strength: Annotated[float, typer.Option("--lora-strength", help="LoRA strength")] = 0.8,
@@ -2842,7 +3049,7 @@ def scene_extract(
     target_file = None
     for f in files:
         file_path = Path(f["file_path"])
-        if file_path.name == model or file_path.stem == model:
+        if model in (file_path.name, file_path.stem):
             target_file = f
             break
 
@@ -2970,7 +3177,7 @@ app.add_typer(templates_app)
 
 
 @templates_app.command("extract")
-def templates_extract(
+def templates_extract(  # noqa: PLR0915
     model: Annotated[str, typer.Argument(help="Local model name (e.g. lust_v10.safetensors)")],
     orientation: Annotated[str, typer.Option("-O", "--orientation", help="Resolution: square, portrait, landscape")] = "portrait",
     no_overrides: Annotated[
@@ -3428,8 +3635,10 @@ def comfy_generate(
 ) -> None:
     """[Deprecated] Use 'tsr generate' instead. All features have been merged into the top-level command."""
     console.print("[yellow]Warning: 'tsr comfy generate' is deprecated. Use 'tsr generate' instead.[/yellow]")
-    # Delegate to the unified generate command via context invocation
-    ctx = typer.Context(generate)
+    # Delegate to the unified generate command via context invocation.
+    # typer.Context expects a click.Command, but passing the typer function directly
+    # works at runtime via duck-typing — keeping it for back-compat with deprecated alias.
+    ctx = typer.Context(generate)  # type: ignore[arg-type]
     generate(
         ctx=ctx,
         prompt=prompt,

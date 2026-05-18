@@ -16,8 +16,15 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path  # noqa: TC003  # used in runtime return annotations exposed to typer
+from typing import TYPE_CHECKING
 
 from tensors.config import DATA_DIR
+
+if TYPE_CHECKING:
+    # Qualified `builtins.list` is referenced in annotations inside FragmentLibrary
+    # because the class defines a method named `list` that shadows the builtin
+    # at class-scope name resolution. Static-only — not needed at runtime.
+    import builtins
 
 # Restrict fragment names to a safe subset so they can't escape the storage dir
 # via path traversal and so file listings stay tidy.
@@ -132,8 +139,11 @@ class FragmentLibrary:
         *,
         name: str | None = None,
         inline: str | None = None,
-        extra: list[str] | None = None,
-    ) -> list[str]:
+        # NOTE: `builtins.list` qualifier needed because this class defines a
+        # `list()` method below, which shadows the builtin in class-scope name
+        # resolution. Affects mypy/pyright even with `from __future__ import annotations`.
+        extra: builtins.list[str] | None = None,
+    ) -> builtins.list[str]:
         """Merge a named fragment with an inline CSV string and optional extras.
 
         Resolution order (first match wins per duplicate): named → inline → extra.

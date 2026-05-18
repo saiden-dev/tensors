@@ -1237,7 +1237,7 @@ class TestDownloadBackgroundTasks:
                 captured["api_key"] = api_key
                 return {"file_id": 42, "sha256": "deadbeef", "linked": True, "cached": True, "error": None}
 
-        monkeypatch.setattr(download_routes_module, "Database", lambda: StubDB())
+        monkeypatch.setattr(download_routes_module, "Database", StubDB)
         return captured
 
     def test_do_download_success(self, monkeypatch, tmp_path) -> None:
@@ -1397,7 +1397,7 @@ class TestDownloadBackgroundTasks:
             def register_downloaded_file(self, *args, **kwargs):
                 return {"file_id": None, "sha256": None, "linked": False, "cached": False, "error": "boom"}
 
-        monkeypatch.setattr(download_routes, "Database", lambda: FailingDB())
+        monkeypatch.setattr(download_routes, "Database", FailingDB)
 
         dest_path = tmp_path / "model.safetensors"
         _do_download(12345, dest_path, None, download_id, {"id": 1, "modelId": 1})

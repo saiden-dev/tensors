@@ -209,7 +209,8 @@ def remote_search(
             response.raise_for_status()
             result: dict[str, Any] = response.json()
             # The remote API wraps CivitAI results under "civitai" key
-            return result.get("civitai", result)
+            civitai_section: dict[str, Any] = result.get("civitai", result)
+            return civitai_section
     except httpx.HTTPStatusError as e:
         if console:
             console.print(f"[red]Remote API error: {e.response.status_code}[/red]")

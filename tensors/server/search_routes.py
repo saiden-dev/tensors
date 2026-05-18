@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from enum import Enum
+from enum import StrEnum
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Query
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/search", tags=["Search"])
 
 
-class Provider(str, Enum):
+class Provider(StrEnum):
     """Search provider options."""
 
     civitai = "civitai"
@@ -45,7 +45,7 @@ class Provider(str, Enum):
     all = "all"
 
 
-class SortOrder(str, Enum):
+class SortOrder(StrEnum):
     """Sort order options."""
 
     downloads = "downloads"

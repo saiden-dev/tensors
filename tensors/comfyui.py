@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import json
 import random
@@ -388,7 +389,7 @@ def queue_prompt(
         return None
 
 
-def _wait_for_completion_ws(
+def _wait_for_completion_ws(  # noqa: PLR0915
     prompt_id: str,
     url: str,
     client_id: str,
@@ -494,10 +495,8 @@ def _wait_for_completion_ws(
                 break
 
     finally:
-        try:
+        with contextlib.suppress(Exception):
             ws.close()
-        except Exception:
-            pass
 
     # Fetch final outputs from history to ensure we have everything
     try:
